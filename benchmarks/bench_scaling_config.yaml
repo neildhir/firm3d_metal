@@ -1,0 +1,22 @@
+# CPU-vs-Metal scaling benchmark on this Mac (Apple M4, 4P+6E CPU, 10-core GPU).
+# Both tracers integrate the same fusion-birth ensembles in the same field at
+# the same tolerance; the CPU runs under 10 MPI ranks, the GPU in one process.
+
+boozmn_file: ../examples/inputs/boozmn_aten_rescaled.nc # relative to this directory; run from here
+
+interpolation:
+  resolution: 48 # interpolation cells per dimension (ns = ntheta = nzeta), dimensionless
+  degree: 3 # degree of the 3D interpolant, dimensionless
+
+tracing:
+  tmax_s: 1.0e-3 # physical tracing time per marker [s]
+  tol: 1.0e-8 # ODE solver tolerance (abstol = reltol), dimensionless
+
+scaling_nparticles: [100, 500, 1000, 5000, 10000] # ensemble sizes for the scaling curve
+
+validation:
+  nparticles: 5000 # ensemble for the loss-fraction comparison, dimensionless
+  tmax_s: 1.0e-2 # physical tracing time [s]
+  tmin_s: 1.0e-5 # start of the loss-fraction curve [s]
+
+seed: 42 # RNG seed for position and velocity sampling
