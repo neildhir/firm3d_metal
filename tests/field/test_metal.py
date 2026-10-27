@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 
 import numpy as np
 import firm3dpp
@@ -42,10 +46,11 @@ class TestMetalTracingBoozerVacuum(unittest.TestCase):
     traced states differ at the orbits' own sensitivity level.
     """
 
+    vacuum = True
+
     def setUp(self):
         self.n_metagrid_pts = 15
         self.filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        self.vacuum = True
         self.bri, self.field, self.nfp = get_field(
             self.filename, self.n_metagrid_pts, self.vacuum
         )
@@ -213,3 +218,133 @@ class TestMetalTracingBoozerVacuum(unittest.TestCase):
             ]
         )
         np.testing.assert_allclose(saved[:, :5], traced, rtol=1e-6, atol=1e-9)
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalTracingBoozerFiniteBeta(TestMetalTracingBoozerVacuum):
+    """
+    All checks of the vacuum class, re-run against the finite-beta
+    right-hand side: the kernel then reads the wider interpolant (I, K and
+    their derivatives) and the wrapper selects RHS_BOOZER instead of
+    RHS_BOOZER_VACUUM, a code path no vacuum test touches.
+    """
+
+    vacuum = False
+
+    def test_selects_finite_beta_rhs(self):
+        # guard against this class silently re-testing the vacuum path
+        self.assertEqual(self.field.field_type, "boozer")
+        res = self.n_metagrid_pts
+        cfield = CatapultBoozerField(
+            self.field.field, res, res, res, precision="single"
+        )
+        self.assertFalse(cfield.vacuum)
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalTracingEdgeCases(unittest.TestCase):
+    """
+    Degenerate inputs exercising the kernel's masking and chunking logic
+    rather than its numerics: the kernel packs 8 particles per 32-thread
+    SIMD-group, so counts leaving a partial block must behave exactly like
+    full ones, and out-of-domain or zero-length traces must terminate.
+    """
+
+    def setUp(self):
+        self.n_metagrid_pts = 15
+        filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
+        self.bri, field, self.nfp = get_field(filename, self.n_metagrid_pts, True)
+        res = self.n_metagrid_pts
+        self.cfield = CatapultBoozerField(field, res, res, res, precision="single")
+
+        stz = sample_test_points(100)
+        inside = stz[:, 0] < 1.0
+        self.stz = stz[inside][:13]
+        velocity = np.sqrt(2 * ENERGY / MASS)
+        self.vpar = np.random.default_rng(2).uniform(-velocity, velocity, 13)
+        self.tmax = 1e-7
+
+    def trace(self, stz, vpar, tmax):
+        res_tys, _ = trace_particles_boozer_gpu(
+            self.cfield,
+            stz,
+            vpar,
+            tmax=tmax,
+            mass=MASS,
+            charge=CHARGE,
+            Ekin=ENERGY,
+            tol=1e-8,
+            forget_exact_path=True,
+        )
+        return res_tys
+
+    def test_partial_simd_block_matches_full(self):
+        # 13 and 5 particles both leave a partial 8-particle block; a
+        # particle's trajectory must be bitwise independent of its block
+        # neighbours and of the padding lanes
+        full = self.trace(self.stz, self.vpar, self.tmax)
+        part = self.trace(self.stz[:5], self.vpar[:5], self.tmax)
+        self.assertEqual(len(full), 13)
+        self.assertEqual(len(part), 5)
+        for i in range(5):
+            np.testing.assert_array_equal(part[i][-1], full[i][-1])
+
+    def test_single_particle(self):
+        res_tys = self.trace(self.stz[:1], self.vpar[:1], self.tmax)
+        self.assertEqual(len(res_tys), 1)
+        self.assertGreaterEqual(res_tys[0][-1, 0], self.tmax)
+
+    def test_tmax_zero_returns_initial_state(self):
+        res_tys = self.trace(self.stz[:3], self.vpar[:3], 0.0)
+        for i, ty in enumerate(res_tys):
+            self.assertEqual(ty[-1, 0], 0.0)
+            np.testing.assert_allclose(ty[-1, 1], self.stz[i, 0], rtol=1e-6)
+
+    def test_born_outside_lcfs_stops_immediately(self):
+        outside = self.stz[:3].copy()
+        outside[:, 0] = 1.05
+        res_tys = self.trace(outside, self.vpar[:3], self.tmax)
+        for ty in res_tys:
+            self.assertLess(ty[-1, 0], self.tmax)  # flagged lost, not traced out
+            self.assertGreaterEqual(ty[-1, 1], 1.0)
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalEnvKnobs(unittest.TestCase):
+    """
+    The diagnostic env vars parse their value: VAR=0/false/off must leave
+    the knob off (a presence-only check once turned FIRM3D_METAL_FAST_MATH=0
+    into relaxed math). The wrapper reads the environment once at first GPU
+    use, so each case needs a fresh interpreter.
+    """
+
+    SCRIPT = (
+        "import numpy as np\n"
+        "from tests.field.test_gpu import "
+        "CATAPULTField, get_field, sample_test_points\n"
+        "bri, field, nfp = get_field("
+        "'examples/inputs/boozmn_aten_rescaled_low_res.nc', 8, True)\n"
+        "f = CATAPULTField(field, ns=8, ntheta=8, nzeta=8, nfp=nfp)\n"
+        "f.compute_gpu_interpolant(sample_test_points(8), dtype=np.float32)\n"
+    )
+
+    def profile_lines(self, value):
+        env = dict(os.environ, FIRM3D_METAL_PROFILE=value)
+        proc = subprocess.run(
+            [sys.executable, "-c", self.SCRIPT],
+            env=env,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parents[2],
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stderr.count("[metal-profile]")
+
+    def test_disabled_values_are_silent(self):
+        for value in ("0", "false", "off"):
+            self.assertEqual(
+                self.profile_lines(value), 0, f"FIRM3D_METAL_PROFILE={value}"
+            )
+
+    def test_enabled_value_prints(self):
+        self.assertGreater(self.profile_lines("1"), 0)
