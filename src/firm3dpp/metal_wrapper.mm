@@ -16,9 +16,11 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <strings.h>
 #include <vector>
 
 #include <pybind11/numpy.h>
@@ -64,6 +66,14 @@ struct TraceParams {
         "have no float64. Build the CATAPULT field with precision=\"single\".");
 }
 
+// True when the env var is set to anything except "", "0", "false", or "off"
+// (case-insensitive), so VAR=0 disables a knob rather than enabling it.
+bool env_flag(const char* name) {
+    const char* v = std::getenv(name);
+    return v != nullptr && v[0] != '\0' && strcmp(v, "0") != 0 &&
+           strcasecmp(v, "false") != 0 && strcasecmp(v, "off") != 0;
+}
+
 // DP5 steps per trace dispatch. Bounds command-buffer runtime below the macOS
 // GPU watchdog while keeping dispatch overhead negligible; overridable for
 // experiments via FIRM3D_METAL_MAX_STEPS.
@@ -85,8 +95,7 @@ constexpr long MAX_TRACE_DISPATCHES = 1000000;
 // separated from host-loop overhead (encode, commit, completion wait, the
 // active-particle scan). Costs two property reads per dispatch when enabled.
 struct ProfileStats {
-    bool enabled = std::getenv("FIRM3D_METAL_PROFILE") != nullptr;
-    long dispatches = 0;
+    bool enabled = env_flag("FIRM3D_METAL_PROFILE");
     double gpu_s = 0.0;
 };
 
@@ -156,7 +165,7 @@ MetalContext& context() {
         // experiments; trajectories then differ from the safe build at the
         // roundoff level, so validate against the CPU tracer before trusting
         // results from it.
-        options.mathMode = std::getenv("FIRM3D_METAL_FAST_MATH") != nullptr
+        options.mathMode = env_flag("FIRM3D_METAL_FAST_MATH")
                          ? MTLMathModeRelaxed : MTLMathModeSafe;
         NSError* error = nil;
         NSString* src = [NSString stringWithUTF8String:FIRM3D_METAL_KERNEL_SOURCE];
@@ -222,7 +231,6 @@ void run_command(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline
     }
     ProfileStats& prof = profile_stats();
     if (prof.enabled) {
-        prof.dispatches += 1;
         prof.gpu_s += cb.GPUEndTime - cb.GPUStartTime;
     }
 }
@@ -244,11 +252,17 @@ void capture_dispatch(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pip
         fprintf(stderr,
                 "[metal-profile] GPU capture failed (set MTL_CAPTURE_ENABLED=1): "
                 "%s\n",
-                [[[error localizedDescription] description] UTF8String]);
+                error != nil ? [[error localizedDescription] UTF8String]
+                             : "no error details");
         run_command(queue, pipeline, buffers, params, params_index, nblocks);
         return;
     }
-    run_command(queue, pipeline, buffers, params, params_index, nblocks);
+    try {
+        run_command(queue, pipeline, buffers, params, params_index, nblocks);
+    } catch (...) {
+        [mgr stopCapture];
+        throw;
+    }
     [mgr stopCapture];
     fprintf(stderr, "[metal-profile] wrote GPU capture to %s\n", path);
 }
@@ -359,10 +373,8 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
         const float* t_host = (const float*)t_b.contents;
         const uint8_t* left_host = (const uint8_t*)left_b.contents;
         ProfileStats& prof = profile_stats();
-        const long prof_dispatches0 = prof.dispatches;
         const double prof_gpu0 = prof.gpu_s;
-        const double wall0 =
-            prof.enabled ? [[NSDate date] timeIntervalSince1970] : 0.0;
+        const auto wall0 = std::chrono::steady_clock::now();
         long dispatches = 0;
         while (true) {
             long active = 0;
@@ -390,13 +402,15 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
             }
         }
         if (prof.enabled) {
-            double wall = [[NSDate date] timeIntervalSince1970] - wall0;
+            double wall = std::chrono::duration<double>(
+                              std::chrono::steady_clock::now() - wall0)
+                              .count();
             double gpu = prof.gpu_s - prof_gpu0;
             fprintf(stderr,
                     "[metal-profile] trace: %d particles, %ld dispatches x %d "
                     "steps, GPU busy %.3f s, loop wall %.3f s (GPU %.1f%%)\n",
-                    nparticles, prof.dispatches - prof_dispatches0,
-                    params.max_steps, gpu, wall, 100.0*gpu/wall);
+                    nparticles, dispatches, params.max_steps, gpu, wall,
+                    wall > 0.0 ? 100.0 * gpu / wall : 0.0);
         }
 
         const float* state_host = (const float*)state_b.contents;

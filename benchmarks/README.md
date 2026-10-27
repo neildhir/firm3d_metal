@@ -81,6 +81,12 @@ percentage points, so the two endpoints are statistically identical.*
   validation leg measures 25.4 s cold, ~27.5 s hot). Compare timings only
   back-to-back under the same thermal conditions, and expect the table
   above (measured cold) to read slightly optimistic mid-session.
+- **Clear the Metal debug knobs before reproducing.** The Metal host reads
+  optional environment variables (`FIRM3D_METAL_PROFILE`,
+  `FIRM3D_METAL_CAPTURE`, `FIRM3D_METAL_MAX_STEPS`, and in particular
+  `FIRM3D_METAL_FAST_MATH`, which recompiles the kernels with relaxed float
+  math and shifts trajectories at roundoff level). `env | grep FIRM3D_METAL`
+  should be empty for runs meant to match the numbers above.
 - **The meaningful uncertainty is statistical, not run-to-run:** with ~44
   losses the Poisson error is ±15%. A different seed would move both
   backends' loss fractions together by about that much; conclusions should
