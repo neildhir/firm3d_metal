@@ -510,6 +510,115 @@ void init_tracing(py::module_ &m){
         py::arg("psi0"),
         py::arg("nparticles")
         );
+    m.attr("gpu_backend") = "cuda";
+#endif
+
+#ifdef USE_METAL
+    // Metal backend: the Boozer kernels in single precision. The double
+    // overloads exist to fail with an informative error, since Apple GPUs
+    // have no FP64; SAW, Cartesian and the double-only timestep test bindings
+    // are not provided.
+    m.def("boozer_gpu_tracing", &boozer_gpu_tracing<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("stz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("psi0"),
+        py::arg("nparticles"),
+        py::arg("vacuum") = false
+        );
+
+    m.def("boozer_gpu_tracing", &boozer_gpu_tracing<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("stz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("psi0"),
+        py::arg("nparticles"),
+        py::arg("vacuum") = false
+        );
+
+    m.def("test_gpu_interpolation", &test_gpu_interpolation<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("coordinates"),
+        py::arg("n_points")
+        );
+
+    m.def("test_gpu_interpolation", &test_gpu_interpolation<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("coordinates"),
+        py::arg("n_points")
+        );
+
+    m.def("test_derivatives_boozer", &test_derivatives_boozer<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("psi0"),
+        py::arg("n_points"),
+        py::arg("vacuum") = false
+        );
+
+    m.def("test_derivatives_boozer", &test_derivatives_boozer<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("psi0"),
+        py::arg("n_points"),
+        py::arg("vacuum") = false
+        );
+
+    // CPU reference derivatives, used by the GPU tests; compiled regardless
+    // of backend but only needed alongside the GPU bindings
+    m.def("simsopt_derivs_boozer", &simsopt_derivs_boozer,
+        py::arg("field"),
+        py::arg("loc"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("vacuum")
+        );
+
+    m.attr("gpu_backend") = "metal";
 #endif
 
 

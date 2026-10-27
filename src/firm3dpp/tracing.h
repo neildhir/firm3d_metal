@@ -114,7 +114,7 @@ particle_guiding_center_boozer_tracing(
 vector<double> simsopt_derivs_boozer(shared_ptr<BoozerMagneticField> field, vector<double> loc, double m, double q, double vtotal, double vtang, bool vacuum);
 vector<double> simsopt_derivs_saw(shared_ptr<ShearAlfvenWave> perturbed_field, vector<double> loc, double m, double q, double vtotal, double vtang, double time, std::string rhs);
 
-#ifdef USE_CUDA
+#if defined(USE_CUDA) || defined(USE_METAL)
 template<typename T>
 vector<T> cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
         py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<T> xyz_init, double m, double q, double vtotal, py::array_t<T> vtang, 
@@ -168,8 +168,25 @@ vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<doubl
         double tol, double psi0, int nparticles);
 
 
-vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
+vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> loc_init, double m, double q, double v_total, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);
+
+#ifdef USE_METAL
+// The Metal backend (metal_wrapper.mm) defines these entry points as explicit
+// specializations: float does the work, double throws, since Apple GPUs have
+// no FP64. Declaring the specializations here keeps the bindings' use of them
+// well-formed.
+template<> vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> srange,
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> stz_init, double m, double q, double vtotal, py::array_t<float> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, double psi0, int nparticles, bool vacuum);
+template<> vector<double> boozer_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> srange,
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, py::array_t<double> mu_in, double psi0, int nparticles, bool vacuum);
+template<> py::array_t<float> test_gpu_interpolation<float>(py::array_t<float> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> loc, std::string coordinates, int n_points);
+template<> py::array_t<double> test_gpu_interpolation<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, std::string coordinates, int n_points);
+template<> py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, double psi0, int n_points, bool vacuum);
+template<> py::array_t<double> test_derivatives_boozer<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, double psi0, int n_points, bool vacuum);
+#endif
 #endif

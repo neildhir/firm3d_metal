@@ -60,7 +60,12 @@ from firm3d.catapult.tracing import (
 )
 from firm3d.trajectory_helpers import compute_loss_fraction
 
-HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
+# these tests exercise the full CUDA surface (double precision, SAW and
+# Cartesian kernels); the Metal backend is validated in test_metal.py
+HAS_CUDA = (
+    hasattr(firm3dpp, "test_gpu_interpolation")
+    and getattr(firm3dpp, "gpu_backend", "cuda") == "cuda"
+)
 n_test_pts = 10000
 
 
