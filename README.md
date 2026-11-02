@@ -28,6 +28,17 @@ FIRM3D (Fast Ion Reduced Models in 3D) is a software suite for modeling of energ
 
 All dependencies can be installed inside a conda environment using the provided install bash script located at `install/macOS/install_firm3d_osx.sh`.
 
+### macOS on Apple Silicon, with the Metal GPU backend
+
+```sh
+bash install/macOS/install_firm3d_metal.sh
+```
+
+Builds FIRM3D with the Metal GPU backend into a uv-managed `.venv` at the
+repository root, installs GSL and Open MPI through Homebrew (asking first),
+and verifies the build with the Metal test suite. Re-run it after every
+`git pull` to rebuild.
+
 ### Perlmutter (NERSC)
 
 All dependencies can be installed inside a conda environment using the provided install bash script located at `install/perlmutter/install_firm3d_perlmutter.sh`.

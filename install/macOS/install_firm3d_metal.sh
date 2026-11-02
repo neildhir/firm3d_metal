@@ -1,0 +1,104 @@
+#!/bin/bash
+# Install this FIRM3D fork, with its Metal GPU backend, on an Apple-Silicon Mac.
+#
+# Python packages go into .venv at the repository root (managed by uv); the
+# system libraries the build links against (GSL, Open MPI) come from Homebrew.
+# Nothing outside the repository is installed without asking first. Safe to
+# re-run: it rebuilds the C++/Metal extension and re-verifies every time, so
+# it is also the way to update after a `git pull`.
+#
+# Usage, from anywhere inside the clone:
+#
+#     bash install/macOS/install_firm3d_metal.sh
+
+set -euo pipefail
+
+PYTHON_VERSION=3.12
+BREW_PACKAGES=(gsl open-mpi)
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
+
+say() { printf '\n==> %s\n' "$1"; }
+die() {
+    printf '\nError: %s\n' "$1" >&2
+    exit 1
+}
+
+# Run a command that installs something outside the repository, after asking.
+# On "no", stop and print the command so it can be run by hand.
+confirm_and_run() {
+    local answer
+    read -r -p "Run '$*' now? [y/N] " answer || answer="" # no terminal: "no"
+    [[ $answer =~ ^[Yy]$ ]] || die "skipped. Run '$*' yourself, then re-run this script."
+    "$@"
+}
+
+say "Checking this is an Apple-Silicon Mac"
+if [[ $(uname -s) != Darwin || $(uname -m) != arm64 ]]; then
+    die "needs macOS on Apple Silicon (arm64); found $(uname -sm).
+       On an Apple-Silicon Mac this means the terminal runs under Rosetta."
+fi
+
+say "Checking the Xcode Command Line Tools (compilers, git)"
+xcode-select -p >/dev/null 2>&1 ||
+    die "not installed. Run 'xcode-select --install', finish the installer, then re-run."
+
+say "Checking Homebrew"
+if ! command -v brew >/dev/null && [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)" # installed but not on PATH yet
+fi
+command -v brew >/dev/null || die "not installed. Install it from https://brew.sh, then re-run."
+
+say "Checking Homebrew packages: ${BREW_PACKAGES[*]}"
+missing=()
+for pkg in "${BREW_PACKAGES[@]}"; do
+    brew list --versions "$pkg" >/dev/null || missing+=("$pkg")
+done
+if ((${#missing[@]})); then
+    confirm_and_run brew install "${missing[@]}"
+fi
+
+say "Checking uv"
+command -v uv >/dev/null || confirm_and_run brew install uv
+
+say "Fetching the bundled C++ libraries (git submodules)"
+git rev-parse --git-dir >/dev/null 2>&1 ||
+    die "not a git clone. Clone the repository with git rather than downloading a zip."
+git submodule update --init --recursive
+
+say "Creating .venv (Python $PYTHON_VERSION)"
+if [[ -x .venv/bin/python ]]; then
+    echo "exists, reusing it"
+else
+    uv venv --python "$PYTHON_VERSION" .venv
+fi
+
+say "Building and installing FIRM3D (compiles the C++/Metal extension: a few minutes)"
+# --reinstall-package forces the rebuild: uv keys its build cache on the
+# packaging files only, so changed C++ or Metal sources would otherwise be
+# silently skipped.
+uv pip install --python .venv/bin/python --reinstall-package firm3d -e ".[dev]"
+
+say "Verifying the Metal backend"
+.venv/bin/python -c '
+import sys, firm3dpp
+backend = getattr(firm3dpp, "gpu_backend", None)
+sys.exit(None if backend == "metal" else f"built without Metal (gpu_backend = {backend!r})")
+'
+.venv/bin/python -m pytest tests/field/test_metal.py -q
+
+say "Verifying MPI (two ranks)"
+mpiexec -n 2 .venv/bin/python -m mpi4py -c '
+from mpi4py import MPI
+assert MPI.COMM_WORLD.size == 2, "mpiexec did not start two ranks"
+'
+
+cat <<EOF
+
+FIRM3D with the Metal backend is installed in $repo_root/.venv.
+To benchmark this Mac, see benchmarks/README.md, or directly:
+
+    cd benchmarks
+    ../.venv/bin/python run_benchmark.py alpha-loss-wistell-a.yaml --tag <your-github-handle>
+EOF
