@@ -54,6 +54,11 @@ COOLDOWN_S = 60
 # same markers, so genuine disagreement is far smaller: the bound is loose on
 # purpose, and only a broken build or install exceeds it.
 SANITY_SIGMAS = 3.0
+# 1-minute load average per CPU core above which the preflight warns that
+# other processes compete with the CPU leg. macOS counts load generously: a
+# base M4 with a browser open idles near 4 on 10 cores, so lower bounds would
+# warn on every run.
+BUSY_LOAD_PER_CORE = 0.5
 
 
 def main() -> None:
@@ -61,7 +66,7 @@ def main() -> None:
     args = parse_args()
     config_path = Path(args.config).resolve()
     cfg = bc.load_config(config_path)
-    preflight(args.allow_dirty)
+    at_launch = preflight(args.allow_dirty)
     # the code and inputs the run starts from; edits made while it runs must
     # not change what it records
     prints, sw = fingerprints(cfg), software()
@@ -96,6 +101,7 @@ def main() -> None:
         "tag": args.tag,
         "machine": hw,
         "mpi_ranks": ranks,
+        "conditions_at_launch": at_launch,
         "legs": legs,
         "fingerprints": prints,
         "software": sw,
@@ -131,13 +137,18 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def preflight(allow_dirty: bool) -> None:
+def preflight(allow_dirty: bool) -> dict[str, Any]:
     """Refuse to benchmark when the results would be wrong or not comparable.
 
     Parameters
     ----------
     allow_dirty : bool
         Accept uncommitted changes to tracked files.
+
+    Returns
+    -------
+    dict[str, Any]
+        Run conditions at launch, before the test suite loads the machine.
 
     Raises
     ------
@@ -176,6 +187,12 @@ def preflight(allow_dirty: bool) -> None:
             f"(thermal state {now['thermal_state']})",
             flush=True,
         )
+    if now["load_average"] > BUSY_LOAD_PER_CORE * (os.cpu_count() or 1):
+        print(
+            f"warning: other processes are busy (load average "
+            f"{now['load_average']:.1f}); quit them for clean CPU timings",
+            flush=True,
+        )
     if git("status", "--porcelain", "--untracked-files=no") and not allow_dirty:
         sys.exit(
             "tracked files have uncommitted changes: "
@@ -186,6 +203,7 @@ def preflight(allow_dirty: bool) -> None:
     tests = [sys.executable, "-m", "pytest", "tests/field/test_metal.py", "-q"]
     if subprocess.run(tests, cwd=REPO_ROOT).returncode != 0:
         sys.exit("the Metal tests failed; fix the install before benchmarking")
+    return now
 
 
 def cpu_command(ranks: int, config_path: Path, out_path: Path) -> list[str]:

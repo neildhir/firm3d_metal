@@ -11,6 +11,7 @@ UUIDs are deliberately not recorded.
 
 import ctypes
 import json
+import os
 import re
 import subprocess
 from typing import Any
@@ -75,14 +76,17 @@ def _process_info(selector: bytes, restype: type) -> Any:
 
 
 def conditions() -> dict[str, Any]:
-    """Run conditions that move wall times: power, Low Power Mode, thermals.
+    """Run conditions that move wall times: power, thermals, competing load.
 
     Returns
     -------
     dict[str, Any]
         ``power_source`` ("AC Power" or "Battery Power"), ``low_power_mode``
-        (bool), and macOS's system-wide ``thermal_state`` (one of
-        THERMAL_STATES).
+        (bool), macOS's system-wide ``thermal_state`` (one of
+        THERMAL_STATES), and the 1-minute ``load_average`` (runnable
+        processes). The thermal state is coarse: it stays "nominal" through
+        the clock-down and the background load that move CPU timings by
+        10-15%, which the load average does catch.
     """
     batt = _run("pmset", "-g", "batt")
     power = re.search(r"'([^']+)'", batt)
@@ -90,6 +94,7 @@ def conditions() -> dict[str, Any]:
         "power_source": power.group(1) if power else "unknown",
         "low_power_mode": bool(_process_info(b"isLowPowerModeEnabled", ctypes.c_bool)),
         "thermal_state": THERMAL_STATES[_process_info(b"thermalState", ctypes.c_long)],
+        "load_average": os.getloadavg()[0],
     }
 
 
