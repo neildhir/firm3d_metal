@@ -1,0 +1,7 @@
+# Seeds and sizes of the synthetic data in the benchmark-tooling tests.
+
+seed: 20261102 # RNG seed for synthetic final states, loss times, and drifts
+nparticles: 400 # markers in a synthetic loss trace, dimensionless
+lost_fraction: 0.1 # share of synthetic markers lost before tmax, dimensionless
+tmax_s: 1.0e-2 # tracing time of the synthetic loss traces [s]
+conservation_nparticles: 100 # markers per synthetic conservation cell, dimensionless

@@ -165,6 +165,11 @@ A run folder holds `run.json` (machine, conditions, fingerprints, sanity
 check), `cpu.json` and `metal.json` (per-backend results), and per-marker
 data in `cpu_*.npz` and `metal_*.npz`.
 
+The tooling has its own tests, which run in seconds on synthetic runs:
+`../.venv/bin/python -m pytest ../tests/benchmarks` from this directory.
+One of them checks that every filed run still fingerprints like its
+benchmark's config, so editing a workload in place fails the suite.
+
 To run a leg by hand (for profiling, say), call its script directly from
 this directory, e.g.
 
