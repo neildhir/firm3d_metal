@@ -59,8 +59,15 @@ def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.flo
         # Full guiding center equations: include I and K
         dGds = field.dGds()
         dIds = field.dIds()
-        K = field.K()
-        K_derivs = field.K_derivs()
+        if field.field_type == "nok":
+            # A no-K field has no K to evaluate. The full equations with K
+            # and its derivatives zero are exactly the no-K equations
+            # (GuidingCenterNoKBoozerRHS on the CPU), so tabulate zeros.
+            K = np.zeros_like(G)
+            K_derivs = np.zeros((G.shape[0], 2))
+        else:
+            K = field.K()
+            K_derivs = field.K_derivs()
         quad_info = np.hstack((modB, modB_derivs, G, dGds, I, dIds, iota, K, K_derivs))
 
     # calculate max J for sampling

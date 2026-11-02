@@ -12,6 +12,10 @@ from firm3d.catapult.tracing import (
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
 )
+from firm3d.field.boozermagneticfield import (
+    BoozerRadialInterpolant,
+    InterpolatedBoozerField,
+)
 from firm3d.field.tracing import (
     MaxToroidalFluxStoppingCriterion,
     trace_particles_boozer,
@@ -34,6 +38,79 @@ from tests.field.test_gpu import (
 
 HAS_METAL = getattr(firm3dpp, "gpu_backend", None) == "metal"
 n_test_pts = 2000
+
+
+def assert_tracing_matches_cpu(
+    test: unittest.TestCase,
+    field: InterpolatedBoozerField,
+    res: int,
+    stz: np.ndarray,
+    vpar: np.ndarray,
+) -> None:
+    """
+    Final states of Metal single precision vs the CPU double tracer: the
+    median and 90th percentile differences per column stay within a
+    factor of the CPU tracer's own spread between tolerances 1e-8 and
+    1e-9, which measures the orbits' sensitivity to any perturbation.
+
+    The kernel stops at the first step boundary at or after tmax
+    (docs/gpu_tracing.rst) while the CPU tracer's dense output lands
+    exactly on tmax, so each particle is traced on the CPU to the time
+    the kernel actually reached, for a comparison at matched times.
+    """
+    tmax = 1e-6
+
+    cfield = CatapultBoozerField(field, res, res, res, precision="single")
+    res_tys, _ = trace_particles_boozer_gpu(
+        cfield,
+        stz,
+        vpar,
+        tmax=tmax,
+        mass=MASS,
+        charge=CHARGE,
+        Ekin=ENERGY,
+        tol=1e-8,
+        forget_exact_path=True,
+    )
+    out_gpu = final_states(res_tys)
+    survived = out_gpu[:, 0] >= 0.999 * tmax
+    test.assertTrue(survived.any())
+
+    def run_cpu(i, tol):
+        res_tys, _ = trace_particles_boozer(
+            field,
+            stz[i : i + 1],
+            vpar[i : i + 1],
+            tmax=float(out_gpu[i, 0]),
+            mass=MASS,
+            charge=CHARGE,
+            Ekin=ENERGY,
+            abstol=tol,
+            reltol=tol,
+            stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+            forget_exact_path=True,
+        )
+        return final_states(res_tys)[0]
+
+    idx = np.where(survived)[0]
+    out_cpu = np.array([run_cpu(i, 1e-8) for i in idx])
+    reference = np.array([run_cpu(i, 1e-9) for i in idx])
+
+    columns = [1, 2, 4]
+    diff = out_gpu[idx][:, columns] - out_cpu[:, columns]
+    ref = reference[:, columns] - out_cpu[:, columns]
+    test.assertTrue(np.any(diff != 0), "Metal single matched CPU double exactly")
+    factor = 10.0
+    for c in range(diff.shape[1]):
+        for q in (50, 90):
+            got = np.percentile(np.abs(diff[:, c]), q)
+            expected = np.percentile(np.abs(ref[:, c]), q)
+            test.assertLessEqual(
+                got,
+                factor * expected + 1e-12,
+                f"column {columns[c]}, p{q}: {got:.3e} exceeds "
+                f"{factor} x {expected:.3e}",
+            )
 
 
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")
@@ -112,75 +189,14 @@ class TestMetalTracingBoozerVacuum(unittest.TestCase):
             )
 
     def test_tracing_against_cpu(self):
-        """
-        Final states of Metal single precision vs the CPU double tracer: the
-        median and 90th percentile differences per column stay within a
-        factor of the CPU tracer's own spread between tolerances 1e-8 and
-        1e-9, which measures the orbits' sensitivity to any perturbation.
-
-        The kernel stops at the first step boundary at or after tmax
-        (docs/gpu_tracing.rst) while the CPU tracer's dense output lands
-        exactly on tmax, so each particle is traced on the CPU to the time
-        the kernel actually reached, for a comparison at matched times.
-        """
-        field = self.field.field
-        res = self.n_metagrid_pts
         inside = self.stz[:, 0] < 1.0
-        stz = self.stz[inside][:64]
-        vpar = self.vpar_init[inside][:64]
-        tmax = 1e-6
-
-        cfield = CatapultBoozerField(field, res, res, res, precision="single")
-        res_tys, _ = trace_particles_boozer_gpu(
-            cfield,
-            stz,
-            vpar,
-            tmax=tmax,
-            mass=MASS,
-            charge=CHARGE,
-            Ekin=ENERGY,
-            tol=1e-8,
-            forget_exact_path=True,
+        assert_tracing_matches_cpu(
+            self,
+            self.field.field,
+            self.n_metagrid_pts,
+            self.stz[inside][:64],
+            self.vpar_init[inside][:64],
         )
-        out_gpu = final_states(res_tys)
-        survived = out_gpu[:, 0] >= 0.999 * tmax
-        self.assertTrue(survived.any())
-
-        def run_cpu(i, tol):
-            res_tys, _ = trace_particles_boozer(
-                field,
-                stz[i : i + 1],
-                vpar[i : i + 1],
-                tmax=float(out_gpu[i, 0]),
-                mass=MASS,
-                charge=CHARGE,
-                Ekin=ENERGY,
-                abstol=tol,
-                reltol=tol,
-                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-                forget_exact_path=True,
-            )
-            return final_states(res_tys)[0]
-
-        idx = np.where(survived)[0]
-        out_cpu = np.array([run_cpu(i, 1e-8) for i in idx])
-        reference = np.array([run_cpu(i, 1e-9) for i in idx])
-
-        columns = [1, 2, 4]
-        diff = out_gpu[idx][:, columns] - out_cpu[:, columns]
-        ref = reference[:, columns] - out_cpu[:, columns]
-        self.assertTrue(np.any(diff != 0), "Metal single matched CPU double exactly")
-        factor = 10.0
-        for c in range(diff.shape[1]):
-            for q in (50, 90):
-                got = np.percentile(np.abs(diff[:, c]), q)
-                expected = np.percentile(np.abs(ref[:, c]), q)
-                self.assertLessEqual(
-                    got,
-                    factor * expected + 1e-12,
-                    f"column {columns[c]}, p{q}: {got:.3e} exceeds "
-                    f"{factor} x {expected:.3e}",
-                )
 
     def test_trajectory_saving_consistent(self):
         """
@@ -239,6 +255,44 @@ class TestMetalTracingBoozerFiniteBeta(TestMetalTracingBoozerVacuum):
             self.field.field, res, res, res, precision="single"
         )
         self.assertFalse(cfield.vacuum)
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalTracingBoozerNoK(unittest.TestCase):
+    """
+    A no-K field (finite beta, K dropped) has no K to evaluate, so its table
+    carries K = 0 and the kernel runs the finite-beta right-hand side, which
+    with K = 0 is exactly the CPU's no-K equations (gc_noK). This is the
+    field type of upstream's p_eta conservation example.
+    """
+
+    def setUp(self):
+        self.res = 15
+        self.bri = BoozerRadialInterpolant(
+            "examples/inputs/boozmn_aten_rescaled_low_res.nc", 3, no_K=True
+        )
+        self.field = InterpolatedBoozerField(
+            self.bri,
+            3,
+            ns_interp=self.res,
+            ntheta_interp=self.res,
+            nzeta_interp=self.res,
+        )
+        self.stz = sample_test_points(n_test_pts)
+        velocity = np.sqrt(2 * ENERGY / MASS)
+        self.vpar = np.random.uniform(-velocity, velocity, (n_test_pts,))
+
+    def test_tabulates_with_finite_beta_rhs(self):
+        res = self.res
+        cfield = CatapultBoozerField(self.field, res, res, res, precision="single")
+        self.assertEqual(cfield.field_type, "nok")
+        self.assertFalse(cfield.vacuum)
+
+    def test_tracing_against_cpu(self):
+        inside = self.stz[:, 0] < 1.0
+        assert_tracing_matches_cpu(
+            self, self.field, self.res, self.stz[inside][:64], self.vpar[inside][:64]
+        )
 
 
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")

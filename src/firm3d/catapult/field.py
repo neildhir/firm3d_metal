@@ -67,7 +67,9 @@ class CatapultBoozerField(_CatapultBoozerTable):
     :class:`CatapultPerturbedBoozerField`.
 
     Args:
-        field: A :class:`BoozerMagneticField` of type ``"vac"`` or ``""``.
+        field: A :class:`BoozerMagneticField` of type ``"vac"``, ``""`` or
+            ``"nok"``. A ``"nok"`` field is traced with the full equations
+            and K tabulated as zero, which are exactly the no-K equations.
         ns, ntheta, nzeta: The number of interpolation cells in each
             coordinate.
         precision: ``"double"`` (the default) or ``"single"``: the precision
@@ -95,7 +97,7 @@ class CatapultBoozerField(_CatapultBoozerTable):
                 "CatapultBoozerField tabulates equilibrium fields; use "
                 "CatapultPerturbedBoozerField for a ShearAlfvenWavesSuperposition"
             )
-        super().__init__(field, ns, ntheta, nzeta, precision, ("vac", ""))
+        super().__init__(field, ns, ntheta, nzeta, precision, ("vac", "", "nok"))
         self.field = field
         self.srange, self.trange, self.zrange, self.quad_info, self.maxJ = (
             boozer_interpolant(
