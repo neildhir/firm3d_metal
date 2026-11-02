@@ -16,7 +16,9 @@ from every contributor's Mac are filed here and plotted together.
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:at-a-glance -->
 
-Speedups are wall-time ratios, CPU (all cores, MPI) over GPU. The loss
+Speedups are wall-time ratios, CPU (MPI, one rank per physical core) over
+GPU; a CPU leg capped below that by memory is marked, since fewer ranks
+flatter the GPU. The loss
 interval is the 95% range of the GPU's change in markers lost, relative
 to the CPU. Drift is the change of a conserved momentum, normalised as on
 the [conservation page](conservation-qh.md); "with builds" charges each

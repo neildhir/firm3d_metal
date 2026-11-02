@@ -100,8 +100,13 @@ class TestEndToEnd(unittest.TestCase):
         )
         cons = self.results / "cons-bench"
         write_conservation_run(cons, "m4", created="2026-11-01T11:00:00+00:00")
-        write_conservation_run(
-            cons, "m1", created="2026-11-02T11:00:00+00:00", tag="c", machine=m1
+        write_conservation_run(  # a Mac whose CPU leg was memory-capped
+            cons,
+            "m1",
+            created="2026-11-02T11:00:00+00:00",
+            tag="c",
+            machine=m1,
+            mpi_ranks=5,
         )
         for page, markers in (
             ("loss-bench.md", ("summary", "physics")),
@@ -147,6 +152,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("Alpha losses: speedup", glance)
         self.assertIn("Conservation: best median drift", glance)
         self.assertEqual(glance.count("| MacBook"), 2)
+        self.assertEqual(glance.count("memory-capped"), 1)  # only the capped Mac
 
     def test_flags_the_failed_physics_check(self) -> None:
         self.assertIn("physics check FAILED", self.warned)

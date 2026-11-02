@@ -59,8 +59,35 @@ class TestAtGpuBest(unittest.TestCase):
         cmp = pcons.at_gpu_best(conservation_run(cpu, self.gpu))
         self.assertIsNone(cmp.cpu)
         self.assertIsNone(cmp.speedup)
-        columns = pcons.glance_columns(cmp)
+        columns = pcons.glance_columns(cmp, "10")
         self.assertIn("—", columns.values())
+
+
+class TestCpuRanks(unittest.TestCase):
+    """Fewer CPU ranks flatter the GPU, so a memory cap is always shown."""
+
+    def ranks_run(self, ranks: int, cores: int) -> Run:
+        record = {"mpi_ranks": ranks, "machine": {"cpu_cores": cores}}
+        return Run(Path("r"), record, {}, {})
+
+    def test_uncapped(self) -> None:
+        self.assertEqual(pcons.cpu_ranks(self.ranks_run(10, 10)), "10")
+
+    def test_capped(self) -> None:
+        ranks = pcons.cpu_ranks(self.ranks_run(5, 8))
+        self.assertEqual(ranks, "5 of 8 cores, memory-capped")
+
+    def test_capped_speedup_is_marked_in_the_glance_table(self) -> None:
+        gpu = [cell(32, 1e-8, 0.8, 2e-6)]
+        cmp = pcons.at_gpu_best(conservation_run([cell(16, 1e-8, 3.0, 1e-6)], gpu))
+        speedups = [
+            pcons.glance_columns(cmp, ranks)[
+                "Conservation: speedup at the GPU's best (with builds)"
+            ]
+            for ranks in ("10", "5 of 8 cores, memory-capped")
+        ]
+        self.assertNotIn("CPU on", speedups[0])
+        self.assertTrue(speedups[1].endswith("CPU on 5 of 8 cores, memory-capped"))
 
 
 class TestFormatting(unittest.TestCase):

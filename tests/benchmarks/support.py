@@ -115,8 +115,12 @@ def write_run(
     arrays: dict[str, dict[str, Any]],
     sanity: bool = True,
     fingerprints: dict[str, str] | None = None,
+    mpi_ranks: int | None = None,
 ) -> Path:
-    """Write one run folder; arrays maps .npz file names to their arrays."""
+    """Write one run folder; arrays maps .npz file names to their arrays.
+
+    The CPU leg uses one rank per core unless mpi_ranks caps it.
+    """
     folder = bench_dir / name
     folder.mkdir(parents=True)
     (folder / "cpu.json").write_text(json.dumps(cpu))
@@ -127,7 +131,7 @@ def write_run(
         "created": created,
         "tag": tag,
         "machine": machine,
-        "mpi_ranks": machine["cpu_cores"],
+        "mpi_ranks": machine["cpu_cores"] if mpi_ranks is None else mpi_ranks,
         "config": config,
         "fingerprints": fingerprints
         or {"config": "c0", "equilibrium": "e0", "metal_sources": "m0"},
@@ -213,6 +217,7 @@ def write_conservation_run(
     tag: str = "neil",
     machine: dict[str, Any] | None = None,
     gpu_offset: int = 1,
+    mpi_ranks: int | None = None,
 ) -> Path:
     """A conservation run: the GPU floors at 2e-6, the CPU at 1e-8.
 
@@ -235,4 +240,5 @@ def write_conservation_run(
             "cpu_drift.npz": {"drift": cpu_drift, "peta0": peta0},
             "metal_drift.npz": {"drift": gpu_drift, "peta0": peta0},
         },
+        mpi_ranks=mpi_ranks,
     )

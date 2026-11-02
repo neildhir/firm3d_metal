@@ -81,7 +81,10 @@ def plot(series: list[Series], cfg: dict[str, Any], outdir: Path) -> Tables:
     work_precision_plot(series, cfg, outdir)
     return Tables(
         page={"summary": summary_table(series), "agreement": agreement_table(series)},
-        headline=dict(headline(s, glance_columns(at_gpu_best(s.run))) for s in series),
+        headline=dict(
+            headline(s, glance_columns(at_gpu_best(s.run), cpu_ranks(s.run)))
+            for s in series
+        ),
     )
 
 
@@ -96,12 +99,18 @@ def at_gpu_best(run: Run) -> AtGpuBest:
     return AtGpuBest(best_cell(cpu), best_gpu, fastest_reaching(cpu, target), fast_gpu)
 
 
-def glance_columns(cmp: AtGpuBest) -> dict[str, str]:
-    """A machine's conservation columns of the at-a-glance table."""
+def glance_columns(cmp: AtGpuBest, ranks: str) -> dict[str, str]:
+    """A machine's conservation columns of the at-a-glance table.
+
+    A speedup against a memory-capped CPU leg (see cpu_ranks) says so,
+    since fewer CPU ranks flatter the GPU.
+    """
     if cmp.speedup is None or cmp.speedup_with_builds is None:
         speedup = "—"
     else:
         speedup = f"{cmp.speedup:.1f}× ({cmp.speedup_with_builds:.1f}×)"
+        if ranks.endswith("memory-capped"):
+            speedup += f", CPU on {ranks}"
     return {
         "Conservation: best median drift, CPU / GPU": (
             f"{cmp.best_cpu['drift']['p50']:.1e} / {cmp.best_gpu['drift']['p50']:.1e}"
@@ -226,7 +235,7 @@ def summary_table(series: list[Series]) -> str:
                 f"| {cmp.speedup:.1f}× | {cmp.speedup_with_builds:.1f}×"
             )
         rows.append(
-            f"| {s.label} | {s.run.record['mpi_ranks']} "
+            f"| {s.label} | {cpu_ranks(s.run)} "
             f"| {cmp.best_cpu['drift']['p50']:.1e} ({cell_name(cmp.best_cpu)}) "
             f"| {cmp.best_gpu['drift']['p50']:.1e} ({cell_name(cmp.best_gpu)}) "
             f"| {timing} |"
@@ -274,6 +283,12 @@ def compare_drifts(a: np.ndarray, b: np.ndarray) -> str:
         # scipy's stubs do not declare the result's pvalue attribute
         p = float(result.pvalue)  # pyright: ignore[reportAttributeAccessIssue]
     return f"median ratio ×{np.exp(np.median(log_ratio)):.3f}, p {p:.2g}"
+
+
+def cpu_ranks(run: Run) -> str:
+    """The CPU leg's MPI ranks, e.g. "10", or "5 of 8 cores, memory-capped"."""
+    ranks, cores = run.record["mpi_ranks"], run.record["machine"]["cpu_cores"]
+    return f"{ranks}" if ranks >= cores else f"{ranks} of {cores} cores, memory-capped"
 
 
 def leg_cells(run: Run, leg: str) -> list[dict[str, Any]]:
