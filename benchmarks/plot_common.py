@@ -67,6 +67,7 @@ class Series:
     run: Run
     label: str
     linestyle: LineStyleType
+    first_run: datetime  # of this machine, which fixes its line style
     physics_failed: bool = False
 
     @property
@@ -75,6 +76,33 @@ class Series:
         if self.physics_failed:
             return f"{self.label}\nphysics check FAILED: see the physics table"
         return self.label
+
+
+@dataclass(frozen=True)
+class Headline:
+    """One machine's at-a-glance numbers from one benchmark."""
+
+    first_run: datetime  # of the machine: orders the at-a-glance table
+    label: str
+    columns: dict[str, str]  # column title -> cell
+
+
+@dataclass(frozen=True)
+class Tables:
+    """What one benchmark contributes to the documentation.
+
+    ``page`` maps a marker name in <benchmark>.md to the Markdown table that
+    belongs between its markers; ``headline`` holds, per machine (keyed by
+    Run.machine_key), its columns of the at-a-glance table in README.md.
+    """
+
+    page: dict[str, str]
+    headline: dict[tuple[str | int, ...], Headline]
+
+
+def headline(series: Series, columns: dict[str, str]) -> tuple[tuple, Headline]:
+    """One machine's at-a-glance entry, keyed for Tables.headline."""
+    return series.run.machine_key, Headline(series.first_run, series.label, columns)
 
 
 def load_runs(bench_dir: Path) -> list[Run]:
@@ -142,6 +170,7 @@ def select_series(runs: list[Run]) -> list[Series]:
         )
 
     latest = [machine_runs[-1] for machine_runs in by_machine.values()]
+    firsts = [machine_runs[0].created for machine_runs in by_machine.values()]
     # identical hardware from two contributors is told apart by their tags
     hardware = [mach.hardware_key(r.record["machine"]) for r in latest]
     labels = [
@@ -152,8 +181,10 @@ def select_series(runs: list[Run]) -> list[Series]:
     if len({r.record["fingerprints"]["metal_sources"] for r in latest}) > 1:
         warn("the plotted runs used different Metal kernel sources")
     return [
-        Series(r, label, style)
-        for r, label, style in zip(latest, labels, LINESTYLES, strict=False)
+        Series(r, label, style, first)
+        for r, label, style, first in zip(
+            latest, labels, LINESTYLES, firsts, strict=False
+        )
     ]
 
 

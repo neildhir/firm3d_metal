@@ -42,10 +42,13 @@ from plot_common import (
     SURFACE,
     TEXT,
     TEXT_2,
+    Headline,
     Run,
     Series,
+    Tables,
     add_legend,
     check_comparable,
+    headline,
     load_runs,
     select_series,
     style_axis,
@@ -60,13 +63,19 @@ LABEL_GAP = 0.08  # minimum vertical spacing of speedup labels, fraction of the 
 
 
 def main(names: list[str]) -> None:
-    """Plot each requested benchmark (default: all) and print its tables."""
+    """Plot each requested benchmark (default: all) and update the pages.
+
+    Each benchmark's tables go into <benchmark>.md and the at-a-glance table
+    into README.md, between their make_plots markers (fill_page); all are
+    printed as well.
+    """
     if names:
         bench_dirs = [RESULTS_DIR / name for name in names]
     else:
         bench_dirs = sorted(
             d for d in RESULTS_DIR.iterdir() if d.is_dir() and d.name != ARCHIVE
         )
+    headlines = []
     for bench_dir in bench_dirs:
         runs = load_runs(bench_dir)
         if not runs:
@@ -81,19 +90,101 @@ def main(names: list[str]) -> None:
             tables = plots_conservation.plot(series, cfg, outdir)
         else:
             tables = plot_loss(series, cfg, outdir)
+        headlines.append(tables.headline)
         print(f"{bench_dir.name}: {len(series)} machine(s) -> {outdir}\n")
-        for table in tables:
+        for table in tables.page.values():
             print(f"{table}\n")
+        fill_page(BENCH_DIR / f"{bench_dir.name}.md", tables.page)
+    if headlines:
+        glance = glance_table(headlines)
+        print(f"at a glance:\n\n{glance}\n")
+        fill_page(BENCH_DIR / "README.md", {"at-a-glance": glance})
 
 
-def plot_loss(series: list[Series], cfg: dict[str, Any], outdir: Path) -> list[str]:
-    """Loss benchmark: physics check, three figures, and two README tables."""
+def fill_page(path: Path, tables: dict[str, str]) -> None:
+    """Write each table between its markers in a Markdown page.
+
+    The table named "summary" replaces whatever lies between the lines
+    "<!-- make_plots:summary -->" and "<!-- /make_plots:summary -->"; the
+    rest of the page is untouched. Missing pages or markers only warn.
+    """
+    if not path.exists():
+        warn(f"{path.name} not found; its tables are printed only")
+        return
+    text = path.read_text()
+    for name, table in tables.items():
+        start, end = f"<!-- make_plots:{name} -->", f"<!-- /make_plots:{name} -->"
+        i, j = text.find(start), text.find(end)
+        if i < 0 or j < i:
+            warn(f"{path.name} has no {start} markers; table printed only")
+            continue
+        text = f"{text[: i + len(start)]}\n{table}\n{text[j:]}"
+    path.write_text(text)
+
+
+def glance_table(headlines: list[dict[tuple[str | int, ...], Headline]]) -> str:
+    """Markdown table: one row per machine, headline columns of every benchmark.
+
+    Machines are ordered by their first run of any benchmark; a machine
+    that has not run a benchmark shows "—" in its columns.
+    """
+    columns: list[str] = []
+    rows: dict[tuple[str | int, ...], list[Headline]] = {}
+    for benchmark in headlines:
+        for key, h in benchmark.items():
+            rows.setdefault(key, []).append(h)
+            columns += [c for c in h.columns if c not in columns]
+    lines = [
+        "<!-- markdownlint-disable MD013 -->",
+        "| Machine | " + " | ".join(columns) + " |",
+        "| --- " * (len(columns) + 1) + "|",
+    ]
+    for entries in sorted(rows.values(), key=lambda e: min(h.first_run for h in e)):
+        cells = {c: v for h in entries for c, v in h.columns.items()}
+        lines.append(
+            f"| {entries[0].label} | "
+            + " | ".join(cells.get(c, "—") for c in columns)
+            + " |"
+        )
+    lines.append("<!-- markdownlint-enable MD013 -->")
+    return "\n".join(lines)
+
+
+def plot_loss(series: list[Series], cfg: dict[str, Any], outdir: Path) -> Tables:
+    """Loss benchmark: physics check, three figures, tables, and headline."""
     checks = physics_checks(series, cfg)
     series = flag_failures(series, checks)
     scaling_plot(series, cfg, outdir)
     validation_plot(series, cfg, outdir)
     gpu_machines_plot(series, cfg, outdir)
-    return [summary_table(series), phys.table([s.label for s in series], checks)]
+    return Tables(
+        page={
+            "summary": summary_table(series),
+            "physics": phys.table([s.label for s in series], checks),
+        },
+        headline=dict(
+            headline(s, loss_glance_columns(s, check, cfg))
+            for s, check in zip(series, checks, strict=True)
+        ),
+    )
+
+
+def loss_glance_columns(
+    s: Series, check: phys.MachineCheck, cfg: dict[str, Any]
+) -> dict[str, str]:
+    """A machine's loss-benchmark columns of the at-a-glance table."""
+    val = cfg["validation"]
+    v_cpu, v_gpu = s.run.cpu["validation"], s.run.metal["validation"]
+    b = check.backends
+    lo, hi = b.loss_change_ci
+    return {
+        f"Alpha losses: speedup, {val['nparticles']:,} × {val['tmax_s'] * 1e3:g} ms": (
+            f"{v_cpu['wall_s'] / v_gpu['wall_s']:.1f}×"
+        ),
+        "Alpha losses: GPU vs CPU markers lost (95% CI)": (
+            f"{b.loss_change:+.0%} ({lo:+.0%} to {hi:+.0%})"
+        ),
+    }
 
 
 def final_states(run: Run, leg: str) -> np.ndarray:

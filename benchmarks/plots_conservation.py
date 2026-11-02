@@ -9,11 +9,13 @@ Writes to plots/<benchmark>/:
   (resolution, tolerance) cell, with each backend's front: the best
   accuracy reached for a given time.
 
-Returns two Markdown tables for the README: each machine's best accuracy per
-backend and the speedup at the GPU's best accuracy, and how each machine's
-per-marker drifts compare with the first (reference) machine's.
+Returns the tables for conservation-qh.md (each machine's best accuracy per
+backend and the speedup at the GPU's best accuracy; how each machine's
+per-marker drifts compare with the first, reference, machine's) and each
+machine's at-a-glance columns for README.md.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +33,9 @@ from plot_common import (
     TEXT,
     Run,
     Series,
+    Tables,
     add_legend,
+    headline,
     style_axis,
 )
 
@@ -39,11 +43,71 @@ BACKENDS = (("cpu", C_CPU, "o"), ("metal", C_GPU, "s"))  # leg, colour, marker
 CELL_ALPHA = 0.3  # the individual cells behind each front in work_precision.png
 
 
-def plot(series: list[Series], cfg: dict[str, Any], outdir: Path) -> list[str]:
-    """Both figures, and the README tables."""
+@dataclass(frozen=True)
+class AtGpuBest:
+    """One machine's backends compared at the best accuracy the GPU reaches.
+
+    Each backend's cell is its fastest one whose median drift is at most
+    the GPU's best, so both deliver the accuracy float32 can reach. The
+    speedup with builds adds each cell's field build (GPU table, CPU
+    interpolant): the worst case, a build per trace, where in production
+    one build serves many traces.
+    """
+
+    best_cpu: dict[str, Any]  # the CPU's most accurate cell
+    best_gpu: dict[str, Any]  # the GPU's most accurate cell
+    cpu: dict[str, Any] | None  # fastest CPU cell at the GPU's best, if any
+    gpu: dict[str, Any]  # fastest GPU cell at its own best
+
+    @property
+    def speedup(self) -> float | None:
+        """Tracing time, CPU / GPU."""
+        if self.cpu is None:
+            return None
+        return self.cpu["wall_s"] / self.gpu["wall_s"]
+
+    @property
+    def speedup_with_builds(self) -> float | None:
+        """Field build plus tracing time, CPU / GPU."""
+        if self.cpu is None:
+            return None
+        total = self.cpu["field_build_s"] + self.cpu["wall_s"]
+        return total / (self.gpu["field_build_s"] + self.gpu["wall_s"])
+
+
+def plot(series: list[Series], cfg: dict[str, Any], outdir: Path) -> Tables:
+    """Both figures, the page's tables, and the at-a-glance columns."""
     drift_vs_tolerance_plot(series, cfg, outdir)
     work_precision_plot(series, cfg, outdir)
-    return [summary_table(series), agreement_table(series)]
+    return Tables(
+        page={"summary": summary_table(series), "agreement": agreement_table(series)},
+        headline=dict(headline(s, glance_columns(at_gpu_best(s.run))) for s in series),
+    )
+
+
+def at_gpu_best(run: Run) -> AtGpuBest:
+    """Compare a run's backends at the GPU's best accuracy."""
+    cpu, gpu = leg_cells(run, "cpu"), leg_cells(run, "metal")
+    best_gpu = best_cell(gpu)
+    target = best_gpu["drift"]["p50"]
+    fast_gpu = fastest_reaching(gpu, target)
+    if fast_gpu is None:  # cannot happen: the best GPU cell reaches the target
+        raise RuntimeError(f"{run.folder.name}: no GPU cell reaches its own best")
+    return AtGpuBest(best_cell(cpu), best_gpu, fastest_reaching(cpu, target), fast_gpu)
+
+
+def glance_columns(cmp: AtGpuBest) -> dict[str, str]:
+    """A machine's conservation columns of the at-a-glance table."""
+    if cmp.speedup is None or cmp.speedup_with_builds is None:
+        speedup = "—"
+    else:
+        speedup = f"{cmp.speedup:.1f}× ({cmp.speedup_with_builds:.1f}×)"
+    return {
+        "Conservation: best median drift, CPU / GPU": (
+            f"{cmp.best_cpu['drift']['p50']:.1e} / {cmp.best_gpu['drift']['p50']:.1e}"
+        ),
+        "Conservation: speedup at the GPU's best (with builds)": speedup,
+    }
 
 
 def drift_vs_tolerance_plot(
@@ -142,37 +206,30 @@ def front(times: np.ndarray, drifts: np.ndarray) -> tuple[list[float], list[floa
 def summary_table(series: list[Series]) -> str:
     """Markdown table: best accuracy per backend, speedup at the GPU's best.
 
-    The speedup compares the fastest cell of each backend whose median
-    drift is at most the GPU's best median drift, so both deliver the
-    accuracy float32 can reach. Wrapped in markdownlint comments lifting
-    the line-length rule, like the other tables.
+    See AtGpuBest. Wrapped in markdownlint comments lifting the line-length
+    rule, like the other tables.
     """
     rows = [
         "<!-- markdownlint-disable MD013 -->",
         "| Machine | CPU ranks | Best median drift, CPU | Best median drift, GPU "
-        "| Time to the GPU's best, CPU / GPU | Speedup |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Tracing to the GPU's best, CPU / GPU | Speedup | With field builds |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for s in series:
-        cpu, gpu = leg_cells(s.run, "cpu"), leg_cells(s.run, "metal")
-        best_cpu, best_gpu = best_cell(cpu), best_cell(gpu)
-        target = best_gpu["drift"]["p50"]
-        fast_cpu, fast_gpu = (
-            fastest_reaching(cpu, target),
-            fastest_reaching(gpu, target),
-        )
-        if fast_cpu is None or fast_gpu is None:
-            timing = "— | —"
+        cmp = at_gpu_best(s.run)
+        if cmp.cpu is None or cmp.speedup is None or cmp.speedup_with_builds is None:
+            timing = "— | — | —"
         else:
             timing = (
-                f"{fast_cpu['wall_s']:.2f} s ({cell_name(fast_cpu)}) / "
-                f"{fast_gpu['wall_s']:.2f} s ({cell_name(fast_gpu)}) "
-                f"| {fast_cpu['wall_s'] / fast_gpu['wall_s']:.1f}×"
+                f"{cmp.cpu['wall_s']:.2f} s ({cell_name(cmp.cpu)}) / "
+                f"{cmp.gpu['wall_s']:.2f} s ({cell_name(cmp.gpu)}) "
+                f"| {cmp.speedup:.1f}× | {cmp.speedup_with_builds:.1f}×"
             )
         rows.append(
             f"| {s.label} | {s.run.record['mpi_ranks']} "
-            f"| {best_cpu['drift']['p50']:.1e} ({cell_name(best_cpu)}) "
-            f"| {target:.1e} ({cell_name(best_gpu)}) | {timing} |"
+            f"| {cmp.best_cpu['drift']['p50']:.1e} ({cell_name(cmp.best_cpu)}) "
+            f"| {cmp.best_gpu['drift']['p50']:.1e} ({cell_name(cmp.best_gpu)}) "
+            f"| {timing} |"
         )
     rows.append("<!-- markdownlint-enable MD013 -->")
     return "\n".join(rows)
