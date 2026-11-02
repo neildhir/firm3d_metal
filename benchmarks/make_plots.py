@@ -110,7 +110,7 @@ def main(names: list[str]) -> None:
         validation_plot(series, cfg, outdir)
         gpu_machines_plot(series, cfg, outdir)
         print(f"{bench_dir.name}: {len(series)} machine(s) -> {outdir}\n")
-        print(summary_table(series), "\n")
+        print(f"{summary_table(series)}\n")
 
 
 def load_runs(bench_dir: Path) -> list[Run]:
@@ -344,13 +344,19 @@ def add_legend(
 
 
 def summary_table(series: list[Series]) -> str:
-    """Markdown table of each machine's headline numbers."""
+    """Markdown table of each machine's headline numbers.
+
+    Wrapped in markdownlint comments that lift the line-length rule: the
+    full machine labels are the point of the table and do not fit in 80
+    columns.
+    """
     first = series[0].run
     big_cpu = first.cpu["scaling"][-1]
     val = first.cpu["validation"]
     big = f"{big_cpu['nparticles']:,} × {big_cpu['tmax_s'] * 1e3:g} ms"
     valid = f"{val['nparticles']:,} × {val['tmax_s'] * 1e3:g} ms"
     rows = [
+        "<!-- markdownlint-disable MD013 -->",
         f"| Machine | CPU ranks | {big}: CPU / GPU | Speedup "
         f"| {valid}: CPU / GPU | Speedup | Lost, CPU / GPU |",
         "| --- | --- | --- | --- | --- | --- | --- |",
@@ -366,6 +372,7 @@ def summary_table(series: list[Series]) -> str:
             f"| {c_val['wall_s'] / g_val['wall_s']:.1f}× "
             f"| {c_val['n_lost']} / {g_val['n_lost']} |"
         )
+    rows.append("<!-- markdownlint-enable MD013 -->")
     return "\n".join(rows)
 
 
