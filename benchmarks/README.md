@@ -1,17 +1,45 @@
 # CPU vs Metal GPU tracing benchmarks
 
-Head-to-head comparison of FIRM3D's production MPI CPU tracer (float64)
-against the new Metal GPU backend (float32) on Apple-Silicon Macs, on
-identical physics. **Objective:** establish that the Metal backend is
-(a) substantially faster than all CPU cores of the same machine combined
-and (b) statistically indistinguishable in its physics output — the two
-conditions for it being useful — and measure how both scale across the
-M-series line-up. The acceptance gate was a ≥3× speedup at production
-ensemble sizes on a base M4.
+FIRM3D's production MPI CPU tracer (float64) against the new Metal GPU
+backend (float32), on Apple-Silicon Macs and on identical physics. Each
+benchmark asks two questions: how much faster is the GPU than all CPU
+cores of the same Mac combined, and is its physics output the same? Runs
+from every contributor's Mac are filed here and plotted together.
+
+## At a glance
+
+<!-- make_plots:at-a-glance -->
+<!-- markdownlint-disable MD013 -->
+| Machine | Alpha losses: speedup, 5,000 × 10 ms | Alpha losses: GPU vs CPU markers lost (95% CI) | Conservation: best median drift, CPU / GPU | Conservation: speedup at the GPU's best (with builds) |
+| --- | --- | --- | --- | --- |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 6.7× | -5% (-15% to +9%) | 1.7e-07 / 1.9e-06 | 4.7× (1.1×) |
+<!-- markdownlint-enable MD013 -->
+<!-- /make_plots:at-a-glance -->
+
+Speedups are wall-time ratios, CPU (all cores, MPI) over GPU. The loss
+interval is the 95% range of the GPU's change in markers lost, relative
+to the CPU. Drift is the change of a conserved momentum, normalised as on
+the [conservation page](conservation-qh.md); "with builds" charges each
+backend's one-off field build to a single trace, the worst case.
+
+## Benchmarks
+
+| Benchmark | What it measures |
+| --- | --- |
+| [Alpha losses in Wistell-A](alpha-loss-wistell-a.md) | speed and loss statistics |
+| [p_η conservation, QH field](conservation-qh.md) | accuracy against a ground truth |
+
+The machine label in every table and legend reads: model (identifier) ·
+chip · CPU cores (performance + efficiency) · GPU cores · memory · macOS.
+In the figures, colour is the backend (blue CPU, orange GPU) and line
+style the machine (solid, dashed, dotted, dash-dot, in order of each
+machine's first run); lines are semi-transparent so coincident curves show
+through, and each machine is drawn from its latest run that passed the
+run-time sanity check.
 
 ## Benchmark your Mac
 
-Three steps; contributions from any M-series Mac are welcome.
+Contributions from any M-series Mac are welcome.
 
 **1. Install** (about 3 minutes; asks before installing anything with
 Homebrew):
@@ -22,138 +50,35 @@ cd firm3d_metal
 bash install/macOS/install_firm3d_metal.sh
 ```
 
-**2. Run** (about 6 minutes on a base M4). Plug in the power adapter,
-quit heavy apps, and leave the machine alone until it finishes:
+**2. Run both benchmarks** (about 6 and 9 minutes on a base M4). Plug in
+the power adapter, quit heavy apps, and leave the machine alone until they
+finish:
 
 ```sh
 cd benchmarks
-../.venv/bin/python run_benchmark.py alpha-loss-wistell-a.yaml \
-    --tag <your-github-handle>
+../.venv/bin/python run_benchmark.py alpha-loss-wistell-a.yaml --tag <you>
+../.venv/bin/python run_benchmark.py conservation-qh.yaml --tag <you>
 ```
 
-It refuses to run on battery, in Low Power Mode, on a stale build, or
-with uncommitted changes, and ends by printing your numbers and either
-"Sanity check passed" or why not. A failed run must not be submitted:
-report it instead.
+where `<you>` is your GitHub handle. Each run refuses to start on
+battery, in Low Power Mode, on a stale build, or with uncommitted changes,
+and ends by printing your numbers and either "Sanity check passed" or why
+not. A failed run must not be submitted: report it instead.
 
 **3. Submit** — see [Submitting a run](#submitting-a-run).
 
-## What is traced, and how
-
-- **Markers:** fusion-birth alpha particles (3.5 MeV). Birth positions are
-  sampled from a D–T reactivity profile peaked on axis
-  (`n_D = 1 − s⁵`, `T = 11.5 (1 − s)` keV); parallel velocities are sampled
-  uniformly in pitch. Sampling is seeded (seed 42), so both tracers
-  integrate bit-identical initial conditions.
-- **Field:** Wistell-A vacuum equilibrium scaled to ARIES-CS size
-  (`examples/inputs/boozmn_aten_rescaled.nc`), tabulated on a 48³ grid with
-  degree-3 interpolation, vacuum enforced — the `gc_vac` guiding-centre
-  equations in Boozer coordinates, as in `examples/gpu_boozer_tracing`.
-- **Integrator:** adaptive Dormand–Prince 5(4) with `abstol = reltol = 1e-6`
-  on both backends. CPU: float64, boost odeint, MPI-parallel over
-  particles, one rank per physical core. GPU: float32, the CATAPULT port
-  to Metal, 8 particles per 32-thread SIMD-group.
-- **Loss criterion:** a marker is lost when it crosses the `s = 1` flux
-  surface; otherwise it survives to `tmax`. Trajectories are not stored
-  (`forget_exact_path=True`), matching production loss-fraction runs.
-
-Two workloads, defined once in `alpha-loss-wistell-a.yaml` and run by
-both backends:
-
-1. **Scaling leg** — ensembles of 100 to 10,000 markers traced for 1 ms,
-   measuring how wall time grows with ensemble size.
-2. **Validation leg** — 5,000 markers traced for 10 ms, comparing the full
-   loss-fraction history, not just wall time.
-
-Each run goes CPU leg → 60 s cool-down → GPU leg, and records the
-machine's exact hardware (model identifier, chip, P/E core split, GPU
-cores, memory, macOS), the power, thermal state, and load average around
-each leg, and fingerprints of the config, equilibrium, and Metal sources.
-
-## Results
-
-<!-- markdownlint-disable MD013 -->
-| Machine | CPU ranks | 10,000 × 1 ms: CPU / GPU | Speedup | 5,000 × 10 ms: CPU / GPU | Speedup | Lost, CPU / GPU |
-| --- | --- | --- | --- | --- | --- | --- |
-| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 10 | 32.0 s / 4.9 s | 6.6× | 176.6 s / 26.2 s | 6.7× | 44 / 42 |
-<!-- markdownlint-enable MD013 -->
-
-The machine label reads: model (identifier) · chip · CPU cores
-(performance + efficiency) · GPU cores · memory · macOS.
-
-![Wall time vs ensemble size, CPU vs Metal GPU, per machine](plots/alpha-loss-wistell-a/scaling.png)
-
-*Scaling leg. Top: wall time vs ensemble size (log–log). The CPU curve is
-near-linear throughout — MPI over particles saturates all cores already at
-small ensembles. The GPU curve is almost flat up to ~1,000 markers because
-small ensembles under-fill the GPU; once it fills, the GPU scales linearly
-too, at a 6–7× lower slope on a base M4. Bottom: the resulting speedup,
-labelled at each machine's largest ensemble — the GPU advantage is largest
-exactly where the physics needs it, at large Monte Carlo ensembles.*
-
-![Loss fraction vs time, CPU float64 vs Metal float32, per machine](plots/alpha-loss-wistell-a/validation.png)
-
-*Validation leg: cumulative loss fraction of 5,000 alphas over 10 ms
-(log–log). On the M4 the float32 GPU curve tracks the float64 CPU
-reference across the full trace — same prompt-loss onset, same shape —
-ending at 0.84% vs 0.88% (42 vs 44 lost), well inside a ±1σ Poisson band
-of ±0.13 percentage points. Marker by marker, 8 of 5,000 end differently
-(5 lost only on the CPU, 3 only on the GPU): chaotic divergence of orbits
-near the loss boundary, symmetric between backends rather than a bias.*
-
-![Metal GPU wall time vs ensemble size, machine by machine](plots/alpha-loss-wistell-a/gpu_machines.png)
-
-*GPU wall time alone, one line per machine: the direct hardware
-comparison, free of each machine's CPU baseline.*
-
-**Reading the plots:** colour is the backend (blue CPU, orange GPU), line
-style the machine (solid, dashed, dotted, dash-dot, in order of each
-machine's first run). Lines are drawn semi-transparent, so curves that
-coincide across machines show through. Each machine is plotted from its
-latest run that passed the sanity check.
-
-### Physics agreement, marker by marker
-
-<!-- markdownlint-disable MD013 -->
-| Machine | CPU vs GPU | Reference GPU vs GPU | Reference CPU vs CPU | Check |
-| --- | --- | --- | --- | --- |
-| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 8 fates differ (5 / 3), p 0.73; losses -5% (95% CI -15% to +9%); loss time ×1.001, p 0.39 | reference | reference | pass |
-<!-- markdownlint-enable MD013 -->
-
-Every trace follows the same seeded markers, so `make_plots.py` compares
-them one by one (`physics_check.py`): each machine's CPU against its GPU,
-and each machine's traces against the first machine's. Per comparison:
-
-- **fates differ (a / b):** markers lost in one trace only — chaotic
-  orbits near the loss boundary, where roundoff decides. McNemar's exact
-  test asks whether they split evenly, i.e. whether one trace
-  systematically loses more.
-- **losses ±x% (95% CI):** the relative change in the number of markers
-  lost, with an exact interval. On the M4 the GPU loses 5% fewer than the
-  CPU, and the data allow anything from 15% fewer to 9% more.
-- **loss time ×r:** the median loss-time ratio of markers lost in both,
-  with a Wilcoxon signed-rank test for one trace losing them
-  systematically sooner.
-
-A machine fails at a 1% family-wise false-alarm rate, and is then flagged
-in the plot legends too. Read **pass** as "no large systematic
-difference": with ~44 of 5,000 markers lost, a GPU must lose about 35–40%
-more than the CPU before the check can tell. The confidence interval is
-the claim the data support; narrowing it to a few percent needs many more
-lost markers, i.e. a larger ensemble or a longer tmax.
-
 ## Submitting a run
 
-Results reach this repository by pull request, one run folder per PR.
+Results reach this repository by pull request.
 
 1. Fork `neildhir/firm3d_metal` on GitHub, then add your fork as a remote:
    `git remote add fork https://github.com/<you>/firm3d_metal.git`.
-2. Commit **only your run folder**, on a branch:
+2. Commit **only your run folders**, on a branch:
 
    ```sh
    git switch -c results/<you>
-   git add benchmarks/results/alpha-loss-wistell-a/<your-run-folder>
-   git commit -m "chore: add <chip> benchmark run"
+   git add benchmarks/results/*/<your-run-folders>
+   git commit -m "chore: add <chip> benchmark runs"
    git push fork results/<you>
    ```
 
@@ -177,75 +102,71 @@ Results reach this repository by pull request, one run folder per PR.
 
 Rules that keep pull requests conflict-free:
 
-- **Never commit `plots/` or this README.** The maintainer regenerates
-  both after merging (`python make_plots.py`, which also prints the
-  results table), so contributions never collide.
+- **Never commit `plots/` or the Markdown pages.** The maintainer
+  regenerates both after merging with `python make_plots.py`, which
+  redraws every figure and rewrites the tables in these pages, so
+  contributions never collide.
 - Never edit another run's folder, and delete any `*.incomplete` folder
   (a crashed run) rather than submitting it.
 - Re-running on the same machine (after an update, say) is welcome: the
   plots show each machine's latest run, the older ones stay on record.
 
-No GitHub account? Zip the run folder and send it to the maintainer.
+No GitHub account? Zip the run folders and send them to the maintainer.
 
 ## Reproducibility and noise
 
-- **Loss statistics are deterministic.** The seed fixes the markers, and
-  each marker integrates independently (no cross-particle coupling, no
-  order-dependent reductions on either backend), so re-running a benchmark
-  reproduces the same results bit for bit on both backends (checked on
-  the M4's final states) — on the CPU side independently of the number
-  of ranks.
+- **Physics results are deterministic.** Seeds fix the markers, and each
+  marker integrates independently (no cross-particle coupling, no
+  order-dependent reductions on either backend), so re-running a
+  benchmark reproduces its results bit for bit on both backends (checked
+  on the M4: loss final states and all 160,000 conservation drifts) — on
+  the CPU side independently of the number of ranks.
 - **Wall times are the noisy part, and macOS's thermal state does not
-  see it.** Back-to-back runs on the M4 agreed to ~1% on the 3-minute
-  validation leg, but the short scaling legs swung by up to 15% (CPU,
-  10,000 × 1 ms: 37.7 s, then 32.0 s seven minutes later), and the CPU
-  validation leg ran ~7% slower than on another day (176 s vs 165 s),
-  all with the thermal state reading "nominal". Each run therefore also
-  records the load average, and the run order is fixed (CPU, 60 s
-  cool-down, GPU). **Treat speedup differences between machines under
-  ~15% as noise** until each machine has repeat runs. Fanless machines
-  (MacBook Air) also throttle under sustained load; that is a property
-  of the machine, not noise, which is why the chassis is in the label.
-- **The meaningful uncertainty is statistical, not run-to-run:** with ~44
-  losses the Poisson error is ±15%. A different seed would move both
-  backends' loss fractions together by about that much; conclusions should
-  rest on the agreement between backends, not on the absolute loss
-  fraction.
-- **The sanity check catches broken installs, not subtle physics.** It
-  passes any GPU loss count within 3σ of the CPU's (about 20–77 for the
-  M4's 44 losses). Claims that Metal gives the same physics on every chip
-  should rest on the marker-by-marker
-  [physics agreement](#physics-agreement-marker-by-marker), not on the
-  check passing.
+  see it.** Back-to-back M4 runs agreed to ~1% on the 3-minute loss
+  validation leg, but short legs swung by up to 15% (CPU, 10,000 markers ×
+  1 ms: 37.7 s, then 32.0 s) and CPU conservation tracing at 64³ by up to
+  2×, all with the thermal state "nominal". Each run therefore records
+  the load average too, and the run order is fixed (CPU, 60 s cool-down,
+  GPU). **Treat speedup differences between machines under ~15% as noise**
+  until each machine has repeat runs. Fanless machines (MacBook Air)
+  throttle under sustained load; that is a property of the machine, not
+  noise, which is why the chassis is in the label.
+- **The run-time sanity check catches broken installs, not subtle
+  physics.** It compares CPU and GPU loosely (loss counts within 3σ;
+  conservation drifts within 10× where float32 resolves the tolerance).
+  Claims about physics rest on each benchmark page's own comparisons.
 - **Comparability is enforced.** `make_plots.py` refuses to plot runs whose
-  config or equilibrium differ, and warns when the Metal sources differ.
-  `run_benchmark.py` refuses to run with any `FIRM3D_METAL_*` debug
-  variable set (`FIRM3D_METAL_FAST_MATH` would shift trajectories at
-  roundoff level). To change the workload, copy the config to a new
-  benchmark name: its runs and plots then live under that name.
+  workload (config or equilibrium) differs, and warns when the Metal
+  sources differ; a config's `execution` section (how the legs run) is not
+  part of the workload. `run_benchmark.py` refuses to run with any
+  `FIRM3D_METAL_*` debug variable set (`FIRM3D_METAL_FAST_MATH` would shift
+  trajectories at roundoff level). To change a workload, copy its config
+  to a new benchmark name: its runs and plots then live under that name.
 
 ## Files
 
 | File | Holds / does |
 | --- | --- |
-| `alpha-loss-wistell-a.yaml` | the benchmark: workloads, field, tolerance |
+| `<benchmark>.yaml` | a benchmark's workload (and its `kind`) |
+| `<benchmark>.md` | its page, tables filled in by `make_plots.py` |
 | `run_benchmark.py` | the one command: checks, both legs, filing |
+| `kinds.py` | per kind: leg scripts, sanity check, summary |
 | `machine.py` | hardware fingerprint and run conditions |
-| `bench_cpu_scaling.py` | CPU leg (MPI over particles) |
-| `bench_metal_gpu.py` | GPU leg (single process) |
-| `bench_common.py` | field build, sampling, loss counting, output |
-| `make_plots.py` | figures and results table from every run |
-| `physics_check.py` | marker-by-marker comparison of traces |
-| `results/<benchmark>/` | one folder per run (see below) |
+| `bench_cpu_scaling.py`, `bench_metal_gpu.py` | loss legs |
+| `bench_cpu_conservation.py`, `bench_metal_conservation.py` | p_η legs |
+| `bench_common.py`, `bench_conservation_common.py` | shared leg code |
+| `make_plots.py` | figures and page tables from every run |
+| `plot_common.py`, `plots_conservation.py` | plotting by kind |
+| `physics_check.py` | marker-by-marker loss comparison |
+| `results/<benchmark>/` | one folder per run |
 | `results/archive/` | first M4 runs, pre-fingerprint; not plotted |
 
 A run folder holds `run.json` (machine, conditions, fingerprints, sanity
-check), `cpu.json` and `metal.json` (timings, loss counts, loss-fraction
-curves), and the validation ensemble's final states in
-`cpu_final_states.npz` and `metal_final_states.npz`.
+check), `cpu.json` and `metal.json` (per-backend results), and per-marker
+data in `cpu_*.npz` and `metal_*.npz`.
 
-To run a leg by hand (for profiling, say), call its script directly, from
-this directory:
+To run a leg by hand (for profiling, say), call its script directly from
+this directory, e.g.
 
 ```sh
 ../.venv/bin/python bench_metal_gpu.py alpha-loss-wistell-a.yaml metal.json
@@ -253,27 +174,6 @@ mpiexec -n <physical cores> ../.venv/bin/python -m mpi4py \
     bench_cpu_scaling.py alpha-loss-wistell-a.yaml cpu.json
 ```
 
-Always launch the MPI script through `python -m mpi4py`: it converts an
+Always launch an MPI script through `python -m mpi4py`: it converts an
 uncaught exception on one rank into `MPI_Abort`, where a plain script would
 leave the other ranks deadlocked in their next collective.
-
-## Numerical notes
-
-- **Use tol 1e-6 for single precision** (the setting of
-  `examples/gpu_boozer_tracing`). A tolerance of 1e-8 sits below float32's
-  roundoff floor (machine epsilon ≈ 1.2e-7), so the step controller chases
-  rounding noise: the archived tol 1e-8 run
-  (`results/archive/2026-10-27_m4/`) shows the same physics but ~2.3×
-  longer GPU wall times.
-- **Survivor classification needs a float32-aware margin.** The GPU
-  integrates time in float32 and stops at the first step boundary at or
-  after tmax, so a survivor can finish exactly on `float32(tmax)` — about
-  2.2e-9 *below* the float64 tmax at tmax = 1e-2. The strict 1e-15 margin
-  in `compute_loss_fraction` then counts it as lost;
-  `bench_common.snap_survivor_times_inplace` corrects for this before any
-  loss accounting. The fix is proposed upstream in
-  ColumbiaStellaratorTheory/firm3d#101.
-- `comm` is passed to `BoozerRadialInterpolant` only, never also to
-  `InterpolatedBoozerField`: the former parallelises over Fourier modes with
-  identically sized collectives on every rank, while point-parallelising the
-  latter on top of it nests mismatched Allreduces (`MPI_ERR_TRUNCATE`).
