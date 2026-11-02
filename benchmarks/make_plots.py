@@ -11,8 +11,13 @@ Colour is the backend and line style the machine, both spelled out in a
 legend below each figure. Each machine is drawn from its latest run that
 passed the sanity check, and keeps its line style for good: styles go to
 machines in order of their first run. Runs of different workloads (config or
-equilibrium fingerprints differ) are never mixed; that is an error. Also
-prints a Markdown summary table per benchmark, for the README.
+equilibrium fingerprints differ) are never mixed; that is an error.
+
+Each plotted machine also gets a marker-by-marker physics check
+(physics_check.py): its CPU against its GPU, and its traces against the
+first machine's. A machine that fails is still plotted, but flagged in the
+legend and warned about. Prints two Markdown tables per benchmark for the
+README: headline numbers and the physics check.
 
 Usage
 -----
@@ -21,7 +26,7 @@ python make_plots.py [benchmark ...]    (default: every benchmark in results/)
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,7 +41,9 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.typing import LineStyleType
 
+import bench_common as bc
 import machine as mach
+import physics_check as phys
 
 BENCH_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BENCH_DIR / "results"
@@ -78,6 +85,11 @@ class Run:
         """Contributor plus hardware: two people's identical Macs stay apart."""
         return (self.record["tag"], *mach.hardware_key(self.record["machine"]))
 
+    def final_states(self, leg: str) -> np.ndarray:
+        """(nparticles, 5) validation final states of leg "cpu" or "metal"."""
+        path = bc.final_states_path(self.folder / f"{leg}.json")
+        return np.load(path)["final_states"]
+
 
 @dataclass(frozen=True)
 class Series:
@@ -86,6 +98,14 @@ class Series:
     run: Run
     label: str
     linestyle: LineStyleType
+    physics_failed: bool = False
+
+    @property
+    def legend_label(self) -> str:
+        """The label, with a second line flagging a failed physics check."""
+        if self.physics_failed:
+            return f"{self.label}\nphysics check FAILED: see the physics table"
+        return self.label
 
 
 def main(names: list[str]) -> None:
@@ -104,6 +124,8 @@ def main(names: list[str]) -> None:
         check_comparable(runs)
         series = select_series(runs)
         cfg = series[0].run.record["config"]
+        checks = physics_checks(series, cfg)
+        series = flag_failures(series, checks)
         outdir = PLOTS_DIR / bench_dir.name
         outdir.mkdir(parents=True, exist_ok=True)
         scaling_plot(series, cfg, outdir)
@@ -111,6 +133,7 @@ def main(names: list[str]) -> None:
         gpu_machines_plot(series, cfg, outdir)
         print(f"{bench_dir.name}: {len(series)} machine(s) -> {outdir}\n")
         print(f"{summary_table(series)}\n")
+        print(f"{phys.table([s.label for s in series], checks)}\n")
 
 
 def load_runs(bench_dir: Path) -> list[Run]:
@@ -191,6 +214,28 @@ def select_series(runs: list[Run]) -> list[Series]:
         Series(r, label, style)
         for r, label, style in zip(latest, labels, LINESTYLES, strict=False)
     ]
+
+
+def physics_checks(
+    series: list[Series], cfg: dict[str, Any]
+) -> list[phys.MachineCheck]:
+    """Marker-by-marker physics check of each machine; the first is reference."""
+    traces = [(s.run.final_states("cpu"), s.run.final_states("metal")) for s in series]
+    return phys.check_machines(traces, cfg["validation"]["tmax_s"])
+
+
+def flag_failures(
+    series: list[Series], checks: list[phys.MachineCheck]
+) -> list[Series]:
+    """Mark machines that fail the physics check, for their legend entries."""
+    flagged = []
+    for s, check in zip(series, checks, strict=True):
+        if check.passed:
+            flagged.append(s)
+            continue
+        warn(f"{s.run.folder.name}: physics check FAILED (see the physics table)")
+        flagged.append(replace(s, physics_failed=True))
+    return flagged
 
 
 def scaling_plot(series: list[Series], cfg: dict[str, Any], outdir: Path) -> None:
@@ -324,7 +369,7 @@ def add_legend(
     entries += [
         (
             Line2D([], [], color=TEXT_2, linewidth=LINEWIDTH, linestyle=s.linestyle),
-            s.label,
+            s.legend_label,
         )
         for s in series
     ]

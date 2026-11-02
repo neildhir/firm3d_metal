@@ -127,13 +127,33 @@ def sample_particles(
         field, nparticles, reactivity, comm=comm, seed=seed
     )
     vpar = initialize_velocity_uniform(VELOCITY, nparticles, comm=comm, seed=seed)
+    # both broadcast from rank 0, so every rank holds the markers
+    if points is None or vpar is None:
+        raise RuntimeError(f"sampling {nparticles} markers returned nothing")
     return points, vpar
+
+
+def lost_mask(final_times: np.ndarray, tmax: float) -> np.ndarray:
+    """Which particles were lost: their trace ended before tmax.
+
+    Parameters
+    ----------
+    final_times : np.ndarray
+        (nparticles,) final time of each trace [s].
+    tmax : float
+        Requested tracing time [s].
+
+    Returns
+    -------
+    np.ndarray
+        (nparticles,) bool, True where the particle was lost.
+    """
+    return final_times < tmax * (1.0 - TMAX_REL_TOL)
 
 
 def n_lost(res_tys: list[np.ndarray], tmax: float) -> int:
     """Number of particles whose trace ended before tmax (after snapping)."""
-    final_times = np.array([ty[-1, 0] for ty in res_tys])
-    return int(np.sum(final_times < tmax * (1.0 - TMAX_REL_TOL)))
+    return int(np.sum(lost_mask(np.array([ty[-1, 0] for ty in res_tys]), tmax)))
 
 
 def final_states_path(results_path: Path) -> Path:
