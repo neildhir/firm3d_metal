@@ -62,6 +62,9 @@ def main() -> None:
     config_path = Path(args.config).resolve()
     cfg = bc.load_config(config_path)
     preflight(args.allow_dirty)
+    # the code and inputs the run starts from; edits made while it runs must
+    # not change what it records
+    prints, sw = fingerprints(cfg), software()
 
     hw = mach.machine()
     created = datetime.now().astimezone()
@@ -94,8 +97,8 @@ def main() -> None:
         "machine": hw,
         "mpi_ranks": ranks,
         "legs": legs,
-        "fingerprints": fingerprints(cfg),
-        "software": software(),
+        "fingerprints": prints,
+        "software": sw,
         "config": cfg,
         "sanity": sanity_check(cpu, metal),
     }
