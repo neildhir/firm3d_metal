@@ -162,4 +162,5 @@ def write_results(
     """
     with open(path, "w") as f:
         json.dump(results, f, indent=2)
+        f.write("\n")  # the repo's end-of-file-fixer hook would rewrite it
     np.savez_compressed(final_states_path(path), final_states=final_states)
