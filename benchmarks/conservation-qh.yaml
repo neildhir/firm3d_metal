@@ -4,8 +4,9 @@
 # follow the same markers on a grid of field resolutions and solver
 # tolerances; the drift is measured on the exact field. The CPU runs one MPI
 # rank per physical core, capped by memory; the GPU one process. Results live
-# in results/conservation-qh/ and are only comparable while this file is
-# unchanged: to change the workload, copy it to a new benchmark name.
+# in results/conservation-qh/ and are only comparable while the workload is
+# unchanged (everything but the execution section): to change the workload,
+# copy this file to a new benchmark name.
 
 kind: conservation # selects the leg scripts, sanity check, and plots
 
@@ -30,4 +31,5 @@ tracing:
 nparticles: 5000 # markers per (resolution, tolerance) cell, dimensionless
 seed: 42 # RNG seed for position and velocity sampling
 
-cpu_rank_memory_gb: 1.0 # peak memory per CPU MPI rank at the top resolution [GB] (0.86 measured on an M4)
+execution: # how the legs run, not what they compute: left out of the run fingerprint
+  cpu_rank_memory_gb: 0.75 # peak memory per CPU MPI rank at the top resolution [GB] (0.64 measured on an M4)

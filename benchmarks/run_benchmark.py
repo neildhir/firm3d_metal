@@ -212,11 +212,11 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
 def cpu_ranks(hw: dict[str, Any], cfg: dict[str, Any]) -> int:
     """One MPI rank per physical core, capped by memory if the config says.
 
-    A config's ``cpu_rank_memory_gb`` is the peak memory one rank needs;
-    the ranks then fit in the machine's memory less MEMORY_RESERVE_GB, so an
-    8 GB Mac runs fewer ranks rather than swapping.
+    A config's ``execution.cpu_rank_memory_gb`` is the peak memory one rank
+    needs; the ranks then fit in the machine's memory less
+    MEMORY_RESERVE_GB, so an 8 GB Mac runs fewer ranks rather than swapping.
     """
-    per_rank = cfg.get("cpu_rank_memory_gb")
+    per_rank = cfg.get("execution", {}).get("cpu_rank_memory_gb")
     if per_rank is None:
         return hw["cpu_cores"]
     fit = int((hw["memory_gb"] - MEMORY_RESERVE_GB) // float(per_rank))
@@ -267,9 +267,12 @@ def fingerprints(cfg: dict[str, Any]) -> dict[str, str]:
 
     ``config`` and ``equilibrium`` define the workload: runs that differ in
     either are never plotted together. ``metal_sources`` is the GPU code;
-    runs that differ in it are plotted together, with a warning.
+    runs that differ in it are plotted together, with a warning. The
+    config's ``execution`` section says how the legs run, not what they
+    compute, so it is left out: tuning it keeps runs comparable.
     """
-    canonical = json.dumps(cfg, sort_keys=True).encode()
+    workload = {k: v for k, v in cfg.items() if k != "execution"}
+    canonical = json.dumps(workload, sort_keys=True).encode()
     return {
         "config": hashlib.sha256(canonical).hexdigest(),
         "equilibrium": sha256_file(BENCH_DIR / cfg["boozmn_file"]),
