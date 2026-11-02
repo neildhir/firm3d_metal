@@ -1,115 +1,66 @@
 """Benchmark plots across machines: CPU (MPI) vs Metal GPU tracing.
 
 Reads every run filed by run_benchmark.py under results/<benchmark>/ and
-writes, per benchmark, to plots/<benchmark>/:
+writes figures per benchmark to plots/<benchmark>/, by kind (kinds.py):
 
-- scaling.png: wall time vs ensemble size, CPU and GPU, with a speedup panel
-- validation.png: loss-fraction curves, CPU float64 vs Metal float32
-- gpu_machines.png: Metal GPU wall time vs ensemble size, machine by machine
+- loss (this module): scaling.png (wall time vs ensemble size, with a
+  speedup panel), validation.png (loss-fraction curves), and
+  gpu_machines.png (GPU wall time, machine by machine)
+- conservation (plots_conservation.py): p_eta drift against tolerance
+  and resolution, and accuracy against tracing time
 
-Colour is the backend and line style the machine, both spelled out in a
-legend below each figure. Each machine is drawn from its latest run that
-passed the sanity check, and keeps its line style for good: styles go to
-machines in order of their first run. Runs of different workloads (config or
-equilibrium fingerprints differ) are never mixed; that is an error.
-
-Each plotted machine also gets a marker-by-marker physics check
-(physics_check.py): its CPU against its GPU, and its traces against the
-first machine's. A machine that fails is still plotted, but flagged in the
-legend and warned about. Prints two Markdown tables per benchmark for the
-README: headline numbers and the physics check.
+The shared encoding, run selection, and comparability rules are in
+plot_common.py. For loss benchmarks each plotted machine also gets a
+marker-by-marker physics check (physics_check.py): its CPU against its GPU,
+and its traces against the first machine's; a machine that fails is still
+plotted, but flagged in the legend and warned about. Prints Markdown tables
+per benchmark for the README.
 
 Usage
 -----
 python make_plots.py [benchmark ...]    (default: every benchmark in results/)
 """
 
-import json
 import sys
-from dataclasses import dataclass, replace
-from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
-from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
-from matplotlib.typing import LineStyleType
 
 import bench_common as bc
-import machine as mach
+import kinds
 import physics_check as phys
+import plots_conservation
+from plot_common import (
+    ALPHA,
+    C_CPU,
+    C_GPU,
+    LINEWIDTH,
+    SURFACE,
+    TEXT,
+    TEXT_2,
+    Run,
+    Series,
+    add_legend,
+    check_comparable,
+    load_runs,
+    select_series,
+    style_axis,
+    warn,
+)
 
 BENCH_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BENCH_DIR / "results"
 PLOTS_DIR = BENCH_DIR / "plots"
 ARCHIVE = "archive"  # results/archive/ holds pre-fingerprint runs; never plotted
-
-# dataviz reference palette (validated): slot 1 blue = CPU, slot 2 orange = GPU
-C_CPU = "#2a78d6"
-C_GPU = "#eb6834"
-SURFACE = "#fcfcfb"
-TEXT = "#0b0b0b"
-TEXT_2 = "#52514e"
-GRID = "#e5e4e0"
-
-# One line style per machine, in order of the machines' first runs. A fifth
-# machine is an error until a further encoding is chosen.
-LINESTYLES: tuple[LineStyleType, ...] = ("-", "--", ":", "-.")
-ALPHA = 0.7  # lets coincident curves from several machines show through
-LINEWIDTH = 2.0
 LABEL_GAP = 0.08  # minimum vertical spacing of speedup labels, fraction of the axis
-LEGEND_HEADER = Line2D([], [], linestyle="none")
-
-
-@dataclass(frozen=True)
-class Run:
-    """One filed benchmark run: its record and both legs' results."""
-
-    folder: Path
-    record: dict[str, Any]
-    cpu: dict[str, Any]
-    metal: dict[str, Any]
-
-    @property
-    def created(self) -> datetime:
-        return datetime.fromisoformat(self.record["created"])
-
-    @property
-    def machine_key(self) -> tuple[str | int, ...]:
-        """Contributor plus hardware: two people's identical Macs stay apart."""
-        return (self.record["tag"], *mach.hardware_key(self.record["machine"]))
-
-    def final_states(self, leg: str) -> np.ndarray:
-        """(nparticles, 5) validation final states of leg "cpu" or "metal"."""
-        path = bc.final_states_path(self.folder / f"{leg}.json")
-        return np.load(path)["final_states"]
-
-
-@dataclass(frozen=True)
-class Series:
-    """A machine as plotted: its latest run, legend label, and line style."""
-
-    run: Run
-    label: str
-    linestyle: LineStyleType
-    physics_failed: bool = False
-
-    @property
-    def legend_label(self) -> str:
-        """The label, with a second line flagging a failed physics check."""
-        if self.physics_failed:
-            return f"{self.label}\nphysics check FAILED: see the physics table"
-        return self.label
 
 
 def main(names: list[str]) -> None:
-    """Plot each requested benchmark (default: all) and print its table."""
+    """Plot each requested benchmark (default: all) and print its tables."""
     if names:
         bench_dirs = [RESULTS_DIR / name for name in names]
     else:
@@ -124,103 +75,39 @@ def main(names: list[str]) -> None:
         check_comparable(runs)
         series = select_series(runs)
         cfg = series[0].run.record["config"]
-        checks = physics_checks(series, cfg)
-        series = flag_failures(series, checks)
         outdir = PLOTS_DIR / bench_dir.name
         outdir.mkdir(parents=True, exist_ok=True)
-        scaling_plot(series, cfg, outdir)
-        validation_plot(series, cfg, outdir)
-        gpu_machines_plot(series, cfg, outdir)
-        print(f"{bench_dir.name}: {len(series)} machine(s) -> {outdir}\n")
-        print(f"{summary_table(series)}\n")
-        print(f"{phys.table([s.label for s in series], checks)}\n")
-
-
-def load_runs(bench_dir: Path) -> list[Run]:
-    """All completed runs of one benchmark, oldest first."""
-    runs = []
-    for folder in sorted(p for p in bench_dir.iterdir() if p.is_dir()):
-        if folder.name.endswith(".incomplete") or not (folder / "run.json").exists():
-            warn(f"skipping {folder.name}: run did not complete")
-            continue
-        runs.append(
-            Run(
-                folder,
-                json.loads((folder / "run.json").read_text()),
-                json.loads((folder / "cpu.json").read_text()),
-                json.loads((folder / "metal.json").read_text()),
-            )
-        )
-    return sorted(runs, key=lambda r: r.created)
-
-
-def check_comparable(runs: list[Run]) -> None:
-    """Refuse to mix workloads; warn when the Metal code differs.
-
-    Raises
-    ------
-    ValueError
-        If the runs' config or equilibrium fingerprints differ.
-    """
-    for key in ("config", "equilibrium"):
-        prints = {r.record["fingerprints"][key] for r in runs}
-        if len(prints) > 1:
-            listing = "\n".join(
-                f"  {r.folder.name}: {r.record['fingerprints'][key][:12]}" for r in runs
-            )
-            raise ValueError(
-                f"runs in {runs[0].folder.parent.name} trace different workloads "
-                f"({key} fingerprints differ); give the changed workload its own "
-                f"benchmark name:\n{listing}"
-            )
-
-
-def select_series(runs: list[Run]) -> list[Series]:
-    """Latest passing run per machine, with stable line styles and labels.
-
-    Raises
-    ------
-    ValueError
-        If there are more machines than line styles.
-    """
-    passing = []
-    for run in runs:
-        if run.record["sanity"]["passed"]:
-            passing.append(run)
+        if kinds.kind_of(cfg) == "conservation":
+            tables = plots_conservation.plot(series, cfg, outdir)
         else:
-            warn(f"skipping {run.folder.name}: failed its sanity check")
+            tables = plot_loss(series, cfg, outdir)
+        print(f"{bench_dir.name}: {len(series)} machine(s) -> {outdir}\n")
+        for table in tables:
+            print(f"{table}\n")
 
-    by_machine: dict[tuple[str | int, ...], list[Run]] = {}
-    for run in passing:  # oldest first, so machines appear by first run
-        by_machine.setdefault(run.machine_key, []).append(run)
-    if len(by_machine) > len(LINESTYLES):
-        raise ValueError(
-            f"{len(by_machine)} machines but only {len(LINESTYLES)} line styles "
-            f"({' '.join(map(str, LINESTYLES))}); "
-            "choose a further encoding in make_plots.py"
-        )
 
-    latest = [machine_runs[-1] for machine_runs in by_machine.values()]
-    # identical hardware from two contributors is told apart by their tags
-    hardware = [mach.hardware_key(r.record["machine"]) for r in latest]
-    labels = [
-        mach.label(r.record["machine"])
-        + (f" [{r.record['tag']}]" if hardware.count(hw) > 1 else "")
-        for r, hw in zip(latest, hardware, strict=True)
-    ]
-    if len({r.record["fingerprints"]["metal_sources"] for r in latest}) > 1:
-        warn("the plotted runs used different Metal kernel sources")
-    return [
-        Series(r, label, style)
-        for r, label, style in zip(latest, labels, LINESTYLES, strict=False)
-    ]
+def plot_loss(series: list[Series], cfg: dict[str, Any], outdir: Path) -> list[str]:
+    """Loss benchmark: physics check, three figures, and two README tables."""
+    checks = physics_checks(series, cfg)
+    series = flag_failures(series, checks)
+    scaling_plot(series, cfg, outdir)
+    validation_plot(series, cfg, outdir)
+    gpu_machines_plot(series, cfg, outdir)
+    return [summary_table(series), phys.table([s.label for s in series], checks)]
+
+
+def final_states(run: Run, leg: str) -> np.ndarray:
+    """(nparticles, 5) validation final states of leg "cpu" or "metal"."""
+    return np.load(bc.final_states_path(run.folder / f"{leg}.json"))["final_states"]
 
 
 def physics_checks(
     series: list[Series], cfg: dict[str, Any]
 ) -> list[phys.MachineCheck]:
     """Marker-by-marker physics check of each machine; the first is reference."""
-    traces = [(s.run.final_states("cpu"), s.run.final_states("metal")) for s in series]
+    traces = [
+        (final_states(s.run, "cpu"), final_states(s.run, "metal")) for s in series
+    ]
     return phys.check_machines(traces, cfg["validation"]["tmax_s"])
 
 
@@ -329,65 +216,6 @@ def gpu_machines_plot(series: list[Series], cfg: dict[str, Any], outdir: Path) -
     plt.close(fig)
 
 
-def add_legend(
-    fig: Figure,
-    series: list[Series],
-    backends: bool = True,
-    backend_markers: bool = False,
-) -> None:
-    """Legend below the axes: backend colours, then machine line styles.
-
-    Grouping the two encodings keeps the legend at (machines + 2) entries
-    instead of one entry per machine and backend.
-    """
-    entries: list[tuple[Line2D, str]] = []
-    if backends:
-        entries += [
-            (LEGEND_HEADER, "Backend"),
-            (
-                Line2D(
-                    [],
-                    [],
-                    color=C_CPU,
-                    linewidth=LINEWIDTH,
-                    marker="o" if backend_markers else "",
-                ),
-                "CPU, float64, MPI with one rank per physical core",
-            ),
-            (
-                Line2D(
-                    [],
-                    [],
-                    color=C_GPU,
-                    linewidth=LINEWIDTH,
-                    marker="s" if backend_markers else "",
-                ),
-                "Metal GPU, float32",
-            ),
-        ]
-    entries.append((LEGEND_HEADER, "Machine"))
-    entries += [
-        (
-            Line2D([], [], color=TEXT_2, linewidth=LINEWIDTH, linestyle=s.linestyle),
-            s.legend_label,
-        )
-        for s in series
-    ]
-    handles, labels = zip(*entries, strict=True)
-    legend = fig.legend(
-        handles,
-        labels,
-        loc="outside lower left",
-        frameon=False,
-        fontsize=9,
-        handlelength=3.5,
-        labelcolor=TEXT,
-    )
-    for text, handle in zip(legend.get_texts(), handles, strict=True):
-        if handle is LEGEND_HEADER:
-            text.set_fontweight("bold")
-
-
 def summary_table(series: list[Series]) -> str:
     """Markdown table of each machine's headline numbers.
 
@@ -455,23 +283,6 @@ def workload(cfg: dict[str, Any], tmax_s: float) -> str:
         f"{cfg['description']}\n"
         f"tmax = {tmax_s * 1e3:g} ms · tol {tol} · {res}³ field table"
     )
-
-
-def style_axis(ax: Axes) -> None:
-    """Recessive grid and spines, secondary ink for labels."""
-    ax.set_facecolor(SURFACE)
-    ax.grid(True, which="major", color=GRID, linewidth=0.8)
-    ax.grid(False, which="minor")
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(GRID)
-    ax.tick_params(colors=TEXT_2, labelsize=9)
-
-
-def warn(message: str) -> None:
-    """Print a warning to stderr."""
-    print(f"warning: {message}", file=sys.stderr)
 
 
 if __name__ == "__main__":
