@@ -112,6 +112,36 @@ machine's first run). Lines are drawn semi-transparent, so curves that
 coincide across machines show through. Each machine is plotted from its
 latest run that passed the sanity check.
 
+### Physics agreement, marker by marker
+
+<!-- markdownlint-disable MD013 -->
+| Machine | CPU vs GPU | Reference GPU vs GPU | Reference CPU vs CPU | Check |
+| --- | --- | --- | --- | --- |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 8 fates differ (5 / 3), p 0.73; losses -5% (95% CI -15% to +9%); loss time ×1.001, p 0.39 | reference | reference | pass |
+<!-- markdownlint-enable MD013 -->
+
+Every trace follows the same seeded markers, so `make_plots.py` compares
+them one by one (`physics_check.py`): each machine's CPU against its GPU,
+and each machine's traces against the first machine's. Per comparison:
+
+- **fates differ (a / b):** markers lost in one trace only — chaotic
+  orbits near the loss boundary, where roundoff decides. McNemar's exact
+  test asks whether they split evenly, i.e. whether one trace
+  systematically loses more.
+- **losses ±x% (95% CI):** the relative change in the number of markers
+  lost, with an exact interval. On the M4 the GPU loses 5% fewer than the
+  CPU, and the data allow anything from 15% fewer to 9% more.
+- **loss time ×r:** the median loss-time ratio of markers lost in both,
+  with a Wilcoxon signed-rank test for one trace losing them
+  systematically sooner.
+
+A machine fails at a 1% family-wise false-alarm rate, and is then flagged
+in the plot legends too. Read **pass** as "no large systematic
+difference": with ~44 of 5,000 markers lost, a GPU must lose about 35–40%
+more than the CPU before the check can tell. The confidence interval is
+the claim the data support; narrowing it to a few percent needs many more
+lost markers, i.e. a larger ensemble or a longer tmax.
+
 ## Submitting a run
 
 Results reach this repository by pull request, one run folder per PR.
@@ -184,8 +214,9 @@ No GitHub account? Zip the run folder and send it to the maintainer.
 - **The sanity check catches broken installs, not subtle physics.** It
   passes any GPU loss count within 3σ of the CPU's (about 20–77 for the
   M4's 44 losses). Claims that Metal gives the same physics on every chip
-  should rest on the loss curves and the per-marker final states, not on
-  the check passing.
+  should rest on the marker-by-marker
+  [physics agreement](#physics-agreement-marker-by-marker), not on the
+  check passing.
 - **Comparability is enforced.** `make_plots.py` refuses to plot runs whose
   config or equilibrium differ, and warns when the Metal sources differ.
   `run_benchmark.py` refuses to run with any `FIRM3D_METAL_*` debug
@@ -204,6 +235,7 @@ No GitHub account? Zip the run folder and send it to the maintainer.
 | `bench_metal_gpu.py` | GPU leg (single process) |
 | `bench_common.py` | field build, sampling, loss counting, output |
 | `make_plots.py` | figures and results table from every run |
+| `physics_check.py` | marker-by-marker comparison of traces |
 | `results/<benchmark>/` | one folder per run (see below) |
 | `results/archive/` | first M4 runs, pre-fingerprint; not plotted |
 
