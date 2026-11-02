@@ -1,0 +1,124 @@
+{
+  "benchmark": "alpha-loss-wistell-a",
+  "run_id": "2026-11-02-1152_Mac16-1_M4-10gpu_neildhir",
+  "created": "2026-11-02T11:52:13-08:00",
+  "tag": "neildhir",
+  "machine": {
+    "model_name": "MacBook Pro",
+    "model_identifier": "Mac16,1",
+    "chip": "Apple M4",
+    "cpu_cores": 10,
+    "cpu_performance_cores": 4,
+    "cpu_efficiency_cores": 6,
+    "gpu_cores": 10,
+    "memory_gb": 16,
+    "macos": "26.6.2",
+    "macos_build": "25G83"
+  },
+  "mpi_ranks": 10,
+  "legs": {
+    "cpu": {
+      "conditions_before": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal"
+      },
+      "conditions_after": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal"
+      },
+      "duration_s": 243.29263997077942
+    },
+    "metal": {
+      "conditions_before": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal"
+      },
+      "conditions_after": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal"
+      },
+      "duration_s": 44.5879111289978
+    }
+  },
+  "fingerprints": {
+    "config": "5c467d737c5109dbfd4bd721ef13b4c6488f056ef9c79aa794d5ffc818a44867",
+    "equilibrium": "25e0f0a8b00e142ccb1c4a24767e96a4fac09ff06ea1a49b0489cbbe9068dcac",
+    "metal_sources": "39f01f9203561c98a82170f72ab6bea7ce8e5b45e72720fd0681bc89a9265782"
+  },
+  "software": {
+    "commit": "ae0ca065cb9ee4e97fd0dece0977c0f0d3dfdd08",
+    "dirty": false,
+    "python": "3.12.14",
+    "mpi": "mpiexec (Open MPI) 5.0.11"
+  },
+  "config": {
+    "description": "fusion-birth alphas, Wistell-A vacuum field (ARIES-CS scale)",
+    "boozmn_file": "../examples/inputs/boozmn_aten_rescaled.nc",
+    "interpolation": {
+      "resolution": 48,
+      "degree": 3
+    },
+    "tracing": {
+      "tmax_s": 0.001,
+      "tol": 1e-06
+    },
+    "scaling_nparticles": [
+      100,
+      500,
+      1000,
+      5000,
+      10000
+    ],
+    "validation": {
+      "nparticles": 5000,
+      "tmax_s": 0.01,
+      "tmin_s": 1e-05
+    },
+    "seed": 42
+  },
+  "sanity": {
+    "passed": true,
+    "checks": [
+      {
+        "workload": "100 x 0.001 s",
+        "n_lost_cpu": 1,
+        "n_lost_metal": 1,
+        "passed": true
+      },
+      {
+        "workload": "500 x 0.001 s",
+        "n_lost_cpu": 4,
+        "n_lost_metal": 4,
+        "passed": true
+      },
+      {
+        "workload": "1000 x 0.001 s",
+        "n_lost_cpu": 7,
+        "n_lost_metal": 8,
+        "passed": true
+      },
+      {
+        "workload": "5000 x 0.001 s",
+        "n_lost_cpu": 26,
+        "n_lost_metal": 28,
+        "passed": true
+      },
+      {
+        "workload": "10000 x 0.001 s",
+        "n_lost_cpu": 73,
+        "n_lost_metal": 75,
+        "passed": true
+      },
+      {
+        "workload": "5000 x 0.01 s (validation)",
+        "n_lost_cpu": 44,
+        "n_lost_metal": 42,
+        "passed": true
+      }
+    ]
+  }
+}
