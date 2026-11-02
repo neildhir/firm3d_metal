@@ -1,0 +1,33 @@
+# Benchmark "conservation-qh": canonical-momentum conservation, CPU vs Metal.
+# In an exactly quasi-symmetric field the guiding-centre equations conserve
+# p_eta, so its drift along a trace is pure numerical error. Both tracers
+# follow the same markers on a grid of field resolutions and solver
+# tolerances; the drift is measured on the exact field. The CPU runs one MPI
+# rank per physical core, capped by memory; the GPU one process. Results live
+# in results/conservation-qh/ and are only comparable while this file is
+# unchanged: to change the workload, copy it to a new benchmark name.
+
+kind: conservation # selects the leg scripts, sanity check, and plots
+
+description: alphas uniform in volume, 2.5%-beta QH field (Landreman & Buller), QS enforced # plot subtitle
+
+boozmn_file: ../examples/inputs/boozmn_beta2.5_QH.nc # relative to this directory; run from here
+
+helicity: # quasi-symmetry enforced on B and K: field depends on (s, m theta - n zeta)
+  m: 1 # poloidal helicity, dimensionless
+  n: -4 # toroidal helicity, dimensionless
+
+interpolation:
+  degree: 3 # degree of the CPU's 3D interpolant, dimensionless
+
+resolutions: [16, 32, 48, 64] # field cells per dimension (ns = ntheta = nzeta), dimensionless
+tolerances: [1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10] # ODE solver tolerance (abstol = reltol), dimensionless
+
+tracing:
+  tmax_s: 1.0e-4 # physical tracing time per marker [s]
+  dt_save_s: 1.0e-5 # interval at which the state is saved to measure p_eta [s]
+
+nparticles: 5000 # markers per (resolution, tolerance) cell, dimensionless
+seed: 42 # RNG seed for position and velocity sampling
+
+cpu_rank_memory_gb: 1.0 # peak memory per CPU MPI rank at the top resolution [GB] (0.86 measured on an M4)

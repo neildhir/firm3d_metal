@@ -2,13 +2,14 @@
 
 The one command contributors run. It checks the machine is fit to benchmark,
 traces the benchmark's workloads with the MPI CPU tracer (one rank per
-physical core), pauses so the machine cools, traces them again with the Metal
-GPU tracer, and files everything in a new folder results/<benchmark>/<run-id>/:
+physical core, capped by memory when the config says what a rank needs),
+pauses so the machine cools, traces them again with the Metal GPU tracer, and
+files everything in a new folder results/<benchmark>/<run-id>/:
 
 - run.json: machine, run conditions, code and config fingerprints, and a
-  CPU-vs-GPU sanity check of the loss counts
-- cpu.json, metal.json: timings and loss-fraction curves per backend
-- cpu_final_states.npz, metal_final_states.npz: per-marker final states
+  CPU-vs-GPU sanity check
+- cpu.json, metal.json: per-backend results, by kind of benchmark (kinds.py)
+- cpu_*.npz, metal_*.npz: per-marker data
 
 The benchmark is named by its config file: alpha-loss-wistell-a.yaml files
 its runs under results/alpha-loss-wistell-a/. make_plots.py reads them all.
@@ -17,13 +18,12 @@ A run in progress (or one that crashed) is kept in <run-id>.incomplete/.
 Usage
 -----
 cd benchmarks
-../.venv/bin/python run_benchmark.py alpha-loss-wistell-a.yaml --tag <github-handle>
+../.venv/bin/python run_benchmark.py <benchmark>.yaml --tag <github-handle>
 """
 
 import argparse
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
@@ -37,6 +37,7 @@ from typing import Any
 import firm3dpp
 
 import bench_common as bc
+import kinds
 import machine as mach
 
 BENCH_DIR = Path(__file__).resolve().parent
@@ -49,11 +50,9 @@ METAL_SOURCES = (METAL_KERNEL, "src/firm3dpp/metal_wrapper.mm")
 # Pause between the CPU and GPU legs [s], so that the GPU leg does not start
 # on a machine heat-soaked by the CPU leg (sustained load costs the M4 ~8%).
 COOLDOWN_S = 60
-# CPU and GPU loss counts must agree within this many standard deviations of
-# the difference of two independent Poisson counts. Both backends trace the
-# same markers, so genuine disagreement is far smaller: the bound is loose on
-# purpose, and only a broken build or install exceeds it.
-SANITY_SIGMAS = 3.0
+# Memory left to macOS and other apps when the CPU leg's ranks are capped by
+# the config's per-rank need [GB]
+MEMORY_RESERVE_GB = 4.0
 # 1-minute load average per CPU core above which the preflight warns that
 # other processes compete with the CPU leg. macOS counts load generously: a
 # base M4 with a browser open idles near 4 on 10 cores, so lower bounds would
@@ -66,6 +65,7 @@ def main() -> None:
     args = parse_args()
     config_path = Path(args.config).resolve()
     cfg = bc.load_config(config_path)
+    kind = kinds.KINDS[kinds.kind_of(cfg)]
     at_launch = preflight(args.allow_dirty)
     # the code and inputs the run starts from; edits made while it runs must
     # not change what it records
@@ -79,14 +79,16 @@ def main() -> None:
     out.mkdir(parents=True)
     print(f"benchmarking {mach.label(hw)}", flush=True)
 
-    ranks = hw["cpu_cores"]
-    legs = {"cpu": run_leg(cpu_command(ranks, config_path, out / "cpu.json"))}
+    ranks = cpu_ranks(hw, cfg)
+    if ranks < hw["cpu_cores"]:
+        print(f"CPU leg capped at {ranks} MPI ranks by memory", flush=True)
+    legs = {"cpu": run_leg(cpu_command(kind, ranks, config_path, out / "cpu.json"))}
     print(f"cooling down for {COOLDOWN_S} s", flush=True)
     time.sleep(COOLDOWN_S)
     legs["metal"] = run_leg(
         [
             sys.executable,
-            "bench_metal_gpu.py",
+            kind.metal_script,
             str(config_path),
             str(out / "metal.json"),
         ]
@@ -96,6 +98,7 @@ def main() -> None:
     metal = json.loads((out / "metal.json").read_text())
     record = {
         "benchmark": benchmark,
+        "kind": kinds.kind_of(cfg),
         "run_id": run_id,
         "created": created.isoformat(timespec="seconds"),
         "tag": args.tag,
@@ -106,11 +109,11 @@ def main() -> None:
         "fingerprints": prints,
         "software": sw,
         "config": cfg,
-        "sanity": sanity_check(cpu, metal),
+        "sanity": kind.sanity_check(cpu, metal),
     }
     (out / "run.json").write_text(json.dumps(record, indent=2) + "\n")
     final = out.rename(out.with_name(run_id))
-    report(record, cpu, metal, final)
+    report(record, kind.summary(cpu, metal), final)
 
 
 def parse_args() -> argparse.Namespace:
@@ -206,18 +209,36 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
     return now
 
 
-def cpu_command(ranks: int, config_path: Path, out_path: Path) -> list[str]:
+def cpu_ranks(hw: dict[str, Any], cfg: dict[str, Any]) -> int:
+    """One MPI rank per physical core, capped by memory if the config says.
+
+    A config's ``cpu_rank_memory_gb`` is the peak memory one rank needs;
+    the ranks then fit in the machine's memory less MEMORY_RESERVE_GB, so an
+    8 GB Mac runs fewer ranks rather than swapping.
+    """
+    per_rank = cfg.get("cpu_rank_memory_gb")
+    if per_rank is None:
+        return hw["cpu_cores"]
+    fit = int((hw["memory_gb"] - MEMORY_RESERVE_GB) // float(per_rank))
+    return max(1, min(hw["cpu_cores"], fit))
+
+
+def cpu_command(
+    kind: kinds.Kind, ranks: int, config_path: Path, out_path: Path
+) -> list[str]:
     """mpiexec command line of the CPU leg."""
+    env = [arg for var in kind.mpi_env for arg in ("-x", var)]
     # -m mpi4py turns an uncaught exception on any rank into MPI_Abort instead
     # of leaving the other ranks deadlocked in their next collective
     return [
         "mpiexec",
         "-n",
         str(ranks),
+        *env,
         sys.executable,
         "-m",
         "mpi4py",
-        "bench_cpu_scaling.py",
+        kind.cpu_script,
         str(config_path),
         str(out_path),
     ]
@@ -269,46 +290,7 @@ def software() -> dict[str, Any]:
     }
 
 
-def sanity_check(cpu: dict[str, Any], metal: dict[str, Any]) -> dict[str, Any]:
-    """Check CPU and GPU loss counts agree, workload by workload.
-
-    Parameters
-    ----------
-    cpu, metal : dict[str, Any]
-        The two legs' results, as written by the bench scripts.
-
-    Returns
-    -------
-    dict[str, Any]
-        ``passed`` (bool) and the per-workload ``checks``.
-    """
-    pairs = [
-        (f"{c['nparticles']} x {c['tmax_s']:g} s", c["n_lost"], g["n_lost"])
-        for c, g in zip(cpu["scaling"], metal["scaling"], strict=True)
-    ]
-    v_cpu, v_gpu = cpu["validation"], metal["validation"]
-    pairs.append(
-        (
-            f"{v_cpu['nparticles']} x {v_cpu['tmax_s']:g} s (validation)",
-            v_cpu["n_lost"],
-            v_gpu["n_lost"],
-        )
-    )
-    checks = [
-        {
-            "workload": name,
-            "n_lost_cpu": n_cpu,
-            "n_lost_metal": n_gpu,
-            "passed": abs(n_cpu - n_gpu) <= SANITY_SIGMAS * math.sqrt(n_cpu + n_gpu),
-        }
-        for name, n_cpu, n_gpu in pairs
-    ]
-    return {"passed": all(c["passed"] for c in checks), "checks": checks}
-
-
-def report(
-    record: dict[str, Any], cpu: dict[str, Any], metal: dict[str, Any], folder: Path
-) -> None:
+def report(record: dict[str, Any], summary: list[str], folder: Path) -> None:
     """Print the run's headline numbers and what to do with the results.
 
     Raises
@@ -316,22 +298,12 @@ def report(
     SystemExit
         Non-zero, if the sanity check failed.
     """
-    rows = [
-        *zip(cpu["scaling"], metal["scaling"], strict=True),
-        (cpu["validation"], metal["validation"]),
-    ]
-    print(f"\n{'workload':>24}  {'CPU [s]':>8}  {'GPU [s]':>8}  speedup  lost CPU/GPU")
-    for c, g in rows:
-        workload = f"{c['nparticles']} x {c['tmax_s']:g} s"
-        print(
-            f"{workload:>24}  {c['wall_s']:8.2f}  {g['wall_s']:8.2f}  "
-            f"{c['wall_s'] / g['wall_s']:6.1f}x  {c['n_lost']:>5} / {g['n_lost']}"
-        )
+    print("\n" + "\n".join(summary))
     print(f"\nresults: {folder.relative_to(BENCH_DIR)}")
     if not record["sanity"]["passed"]:
         sys.exit(
-            "SANITY CHECK FAILED: CPU and GPU loss counts disagree beyond "
-            "Poisson noise (see run.json). Do not submit this run; report it."
+            "SANITY CHECK FAILED: CPU and GPU disagree beyond what numerics "
+            "explain (see run.json). Do not submit this run; report it."
         )
     print(
         "Sanity check passed. To submit, see 'Submitting a run' in "
