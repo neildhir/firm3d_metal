@@ -1,6 +1,11 @@
-# CPU-vs-Metal scaling benchmark on this Mac (Apple M4, 4P+6E CPU, 10-core GPU).
-# Both tracers integrate the same fusion-birth ensembles in the same field at
-# the same tolerance; the CPU runs under 10 MPI ranks, the GPU in one process.
+# Benchmark "alpha-loss-wistell-a": CPU-vs-Metal tracing of fusion-birth alphas.
+# Both tracers integrate the same ensembles in the same field at the same
+# tolerance; the CPU runs one MPI rank per physical core, the GPU one process.
+# Results from every machine live in results/alpha-loss-wistell-a/ and are only
+# comparable while this file is unchanged: to change the workload, copy it to
+# a new benchmark name instead of editing it.
+
+description: fusion-birth alphas, Wistell-A vacuum field (ARIES-CS scale) # plot subtitle
 
 boozmn_file: ../examples/inputs/boozmn_aten_rescaled.nc # relative to this directory; run from here
 

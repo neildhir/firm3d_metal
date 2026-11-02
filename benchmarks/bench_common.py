@@ -130,7 +130,36 @@ def sample_particles(
     return points, vpar
 
 
-def write_results(path: Path, results: dict[str, Any]) -> None:
-    """Write benchmark results as JSON."""
+def n_lost(res_tys: list[np.ndarray], tmax: float) -> int:
+    """Number of particles whose trace ended before tmax (after snapping)."""
+    final_times = np.array([ty[-1, 0] for ty in res_tys])
+    return int(np.sum(final_times < tmax * (1.0 - TMAX_REL_TOL)))
+
+
+def final_states_path(results_path: Path) -> Path:
+    """Where the final states belonging to a results JSON are stored."""
+    return results_path.with_name(f"{results_path.stem}_final_states.npz")
+
+
+def write_results(
+    path: Path, results: dict[str, Any], final_states: np.ndarray
+) -> None:
+    """Write benchmark results as JSON, and the final states beside them.
+
+    The final states go to a compressed .npz (see final_states_path) rather
+    than into the JSON: as text they would triple the size of every run
+    committed to the repository.
+
+    Parameters
+    ----------
+    path : Path
+        JSON file to write.
+    results : dict[str, Any]
+        Timings, loss counts, and loss-fraction curves.
+    final_states : np.ndarray
+        (nparticles, 5) float64 final (t, s, theta, zeta, vpar) of the
+        validation ensemble.
+    """
     with open(path, "w") as f:
         json.dump(results, f, indent=2)
+    np.savez_compressed(final_states_path(path), final_states=final_states)

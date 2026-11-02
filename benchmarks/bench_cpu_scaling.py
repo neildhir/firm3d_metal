@@ -1,12 +1,13 @@
 """CPU (MPI) scaling benchmark for FIRM3D tracing.
 
 The CPU counterpart of bench_metal_gpu.py: traces the same fusion-birth
-ensembles with the double-precision MPI tracer and writes timings, final
-states, and the loss-fraction curve to JSON (rank 0 only).
+ensembles with the double-precision MPI tracer and writes timings and the
+loss-fraction curve to JSON, final states to a sibling .npz (rank 0 only).
+Normally launched by run_benchmark.py; by hand, one rank per physical core:
 
 Usage
 -----
-mpiexec -n 10 python -m mpi4py bench_cpu_scaling.py config.yaml out.json
+mpiexec -n 10 python -m mpi4py bench_cpu_scaling.py alpha-loss-wistell-a.yaml cpu.json
 
 (-m mpi4py turns an uncaught exception on any rank into MPI_Abort; without it
 the surviving ranks deadlock in the next collective.)
@@ -84,8 +85,7 @@ def main(config_path: Path, out_path: Path) -> None:
         res_tys = trace(field, points, vpar, tmax, tol)
         wall = time.time() - t0
         bc.snap_survivor_times_inplace(res_tys, tmax)
-        final_times = np.array([ty[-1, 0] for ty in res_tys])
-        n_lost = int(np.sum(final_times < tmax * (1.0 - bc.TMAX_REL_TOL)))
+        n_lost = bc.n_lost(res_tys, tmax)
         scaling.append(
             {"nparticles": int(n), "tmax_s": tmax, "wall_s": wall, "n_lost": n_lost}
         )
@@ -109,9 +109,9 @@ def main(config_path: Path, out_path: Path) -> None:
         "nparticles": n_val,
         "tmax_s": tmax_val,
         "wall_s": wall,
+        "n_lost": bc.n_lost(res_tys, tmax_val),
         "loss_times_s": times.tolist(),
         "loss_fraction": loss_frac.tolist(),
-        "final_states": final.tolist(),
     }
     if verbose:
         print(
@@ -119,7 +119,7 @@ def main(config_path: Path, out_path: Path) -> None:
             f"final loss fraction {loss_frac[-1]:.4f}",
             flush=True,
         )
-        bc.write_results(out_path, results)
+        bc.write_results(out_path, results, final)
 
 
 if __name__ == "__main__":
