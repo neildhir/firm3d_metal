@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -30,6 +31,31 @@ class TestCpuRanks(unittest.TestCase):
     def test_always_at_least_one_rank(self) -> None:
         cfg = {"execution": {"cpu_rank_memory_gb": 64.0}}
         self.assertEqual(rb.cpu_ranks({"cpu_cores": 10, "memory_gb": 8}, cfg), 1)
+
+
+class TestBuildProblem(unittest.TestCase):
+    KERNEL = b"kernel void trace_boozer() {}"
+
+    def problem(self, binary: bytes) -> str | None:
+        with tempfile.TemporaryDirectory() as tmp:
+            built = Path(tmp) / "firm3dpp.so"
+            built.write_bytes(binary)
+            return rb.build_problem(str(built), self.KERNEL)
+
+    def test_current_build_passes(self) -> None:
+        self.assertIsNone(self.problem(b"head" + self.KERNEL + b"tail"))
+
+    def test_stale_kernel_is_refused(self) -> None:
+        problem = self.problem(b"head kernel void trace_boozer_old() {} tail")
+        self.assertIn("stale", problem or "")
+
+    def test_openmp_build_is_refused(self) -> None:
+        # what a build linking Homebrew's libomp carries in its load commands
+        binary = self.KERNEL + b"/opt/homebrew/opt/libomp/lib/libomp.dylib"
+        self.assertIn("OpenMP", self.problem(binary) or "")
+
+    def test_unlocated_build_is_refused(self) -> None:
+        self.assertIsNotNone(rb.build_problem(None, self.KERNEL))
 
 
 class TestCpuCommand(unittest.TestCase):

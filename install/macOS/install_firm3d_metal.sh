@@ -116,6 +116,10 @@ import sys, firm3dpp
 backend = getattr(firm3dpp, "gpu_backend", None)
 sys.exit(None if backend == "metal" else f"built without Metal (gpu_backend = {backend!r})")
 '
+extension="$(.venv/bin/python -c 'import firm3dpp; print(firm3dpp.__file__)')"
+if otool -L "$extension" | grep -q 'libomp\.dylib'; then
+    die "the extension links libomp although the build turns OpenMP off (see above)."
+fi
 .venv/bin/python -m pytest tests/field/test_metal.py -q
 
 say "Verifying MPI (two ranks)"

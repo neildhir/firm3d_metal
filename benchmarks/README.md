@@ -63,7 +63,8 @@ cd benchmarks
 ```
 
 where `<you>` is your GitHub handle. Each run refuses to start on
-battery, in Low Power Mode, on a stale build, or with uncommitted changes,
+battery, in Low Power Mode, on a stale build or one with OpenMP (re-run the
+install script for either), or with uncommitted changes,
 and ends by printing your numbers and either "Sanity check passed" or why
 not. A failed run must not be submitted: report it instead.
 

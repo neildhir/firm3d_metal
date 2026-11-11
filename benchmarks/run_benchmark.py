@@ -164,23 +164,9 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
             f"firm3dpp was built without Metal (gpu_backend = {backend!r}); "
             f"run {INSTALL_SCRIPT}"
         )
-    # The kernel source is embedded verbatim in the extension, so a build that
-    # predates the last `git pull` shows up as a mismatch here.
-    kernel = (REPO_ROOT / METAL_KERNEL).read_bytes()
-    built = firm3dpp.__file__
-    binary = b"" if built is None else Path(built).read_bytes()
-    if kernel not in binary:
-        sys.exit(
-            f"the built Metal kernel is stale (it differs from {METAL_KERNEL}); "
-            f"re-run {INSTALL_SCRIPT}"
-        )
-    # An OpenMP build segfaults alongside the libomp booz_xform bundles (see
-    # the install script). The extension names the libomp it links.
-    if b"libomp.dylib" in binary:
-        sys.exit(
-            "firm3dpp was built with OpenMP, which crashes alongside "
-            f"booz_xform's own OpenMP runtime; re-run {INSTALL_SCRIPT}"
-        )
+    problem = build_problem(firm3dpp.__file__, (REPO_ROOT / METAL_KERNEL).read_bytes())
+    if problem is not None:
+        sys.exit(f"{problem}; re-run {INSTALL_SCRIPT}")
     knobs = sorted(k for k in os.environ if k.startswith("FIRM3D_METAL_"))
     if knobs:
         sys.exit(f"unset the Metal debug variables first: {', '.join(knobs)}")
@@ -215,6 +201,38 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
     if subprocess.run(tests, cwd=REPO_ROOT).returncode != 0:
         sys.exit("the Metal tests failed; fix the install before benchmarking")
     return now
+
+
+def build_problem(built: str | None, kernel: bytes) -> str | None:
+    """Why the built extension must not be benchmarked, if it must not.
+
+    Parameters
+    ----------
+    built : str or None
+        Path of the built firm3dpp extension (``firm3dpp.__file__``).
+    kernel : bytes
+        The checkout's Metal kernel source.
+
+    Returns
+    -------
+    str or None
+        What is wrong with the build, or None if nothing is.
+    """
+    if built is None:
+        return "cannot locate the built firm3dpp extension"
+    binary = Path(built).read_bytes()
+    # The kernel source is embedded verbatim in the extension, so a build that
+    # predates the last `git pull` shows up as a mismatch here.
+    if kernel not in binary:
+        return f"the built Metal kernel is stale (it differs from {METAL_KERNEL})"
+    # An OpenMP build segfaults alongside the libomp booz_xform bundles (see
+    # the install script). The extension names the libomp it links.
+    if b"libomp.dylib" in binary:
+        return (
+            "firm3dpp was built with OpenMP, which crashes alongside "
+            "booz_xform's own OpenMP runtime"
+        )
+    return None
 
 
 def cpu_ranks(hw: dict[str, Any], cfg: dict[str, Any]) -> int:
