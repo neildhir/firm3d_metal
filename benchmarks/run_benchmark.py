@@ -168,10 +168,18 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
     # predates the last `git pull` shows up as a mismatch here.
     kernel = (REPO_ROOT / METAL_KERNEL).read_bytes()
     built = firm3dpp.__file__
-    if built is None or kernel not in Path(built).read_bytes():
+    binary = b"" if built is None else Path(built).read_bytes()
+    if kernel not in binary:
         sys.exit(
             f"the built Metal kernel is stale (it differs from {METAL_KERNEL}); "
             f"re-run {INSTALL_SCRIPT}"
+        )
+    # An OpenMP build segfaults alongside the libomp booz_xform bundles (see
+    # the install script). The extension names the libomp it links.
+    if b"libomp.dylib" in binary:
+        sys.exit(
+            "firm3dpp was built with OpenMP, which crashes alongside "
+            f"booz_xform's own OpenMP runtime; re-run {INSTALL_SCRIPT}"
         )
     knobs = sorted(k for k in os.environ if k.startswith("FIRM3D_METAL_"))
     if knobs:

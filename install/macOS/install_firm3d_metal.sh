@@ -100,7 +100,15 @@ say "Building and installing FIRM3D (compiles the C++/Metal extension: a few min
 # --reinstall-package forces the rebuild: uv keys its build cache on the
 # packaging files only, so changed C++ or Metal sources would otherwise be
 # silently skipped.
-uv pip install --python .venv/bin/python --reinstall-package firm3d -e ".[dev]"
+#
+# OpenMP stays off, even where Homebrew's libomp is installed: booz_xform's
+# wheel bundles its own libomp, and with two OpenMP runtimes in one process
+# macOS keeps one copy of the symbols both export, so firm3dpp's runtime runs
+# code of booz_xform's, which was never started, and segfaults in its first
+# multithreaded loop. OpenMP only threads the field setup's Fourier
+# transforms; CPU tracing is parallel over MPI ranks.
+CMAKE_ARGS="${CMAKE_ARGS:+$CMAKE_ARGS }-DCMAKE_DISABLE_FIND_PACKAGE_OpenMP=ON" \
+    uv pip install --python .venv/bin/python --reinstall-package firm3d -e ".[dev]"
 
 say "Verifying the Metal backend"
 .venv/bin/python -c '
