@@ -1,8 +1,10 @@
 #!/bin/bash
 # Install this FIRM3D fork, with its Metal GPU backend, on an Apple-Silicon Mac.
 #
-# Python packages go into .venv at the repository root (managed by uv); the
-# system libraries the build links against (GSL, Open MPI) come from Homebrew.
+# Python packages go into .venv at the repository root (managed by uv, on uv's
+# own Python); the system libraries the build links against (GSL, Open MPI)
+# come from Homebrew. Conda is kept out of the build: run it with no conda
+# environment active.
 # Nothing outside the repository is installed without asking first. Safe to
 # re-run: it rebuilds the C++/Metal extension and re-verifies every time, so
 # it is also the way to update after a `git pull`.
@@ -40,6 +42,17 @@ if [[ $(uname -s) != Darwin || $(uname -m) != arm64 ]]; then
        On an Apple-Silicon Mac this means the terminal runs under Rosetta."
 fi
 
+say "Checking no conda environment is active"
+# An active conda environment leaks into the build: CMakeLists.txt puts
+# $CONDA_PREFIX/include ahead of every other header path, and CMake finds
+# packages through conda's bin/ on PATH. Anaconda's Boost, for one, then
+# shadows the build's own and fails to compile against current Xcode, whose
+# C++17 standard library no longer has std::unary_function.
+if [[ -n ${CONDA_PREFIX:-} ]]; then
+    die "conda environment $CONDA_PREFIX is active, and would leak into the build.
+       Run 'conda deactivate' until no environment is active, then re-run."
+fi
+
 say "Checking the Xcode Command Line Tools (compilers, git)"
 xcode-select -p >/dev/null 2>&1 ||
     die "not installed. Run 'xcode-select --install', finish the installer, then re-run."
@@ -69,9 +82,18 @@ git submodule update --init --recursive
 
 say "Creating .venv (Python $PYTHON_VERSION)"
 if [[ -x .venv/bin/python ]]; then
+    # A venv made from conda's Python runs on conda's interpreter and the
+    # libraries it bundles, which this build is not tested against. Conda
+    # installs are marked by a conda-meta directory.
+    base="$(.venv/bin/python -c 'import sys; print(sys.base_prefix)')"
+    if [[ -d $base/conda-meta ]]; then
+        die ".venv was made from conda's Python ($base).
+       Remove it with 'rm -rf .venv', then re-run to make it from uv's own Python."
+    fi
     echo "exists, reusing it"
 else
-    uv venv --python "$PYTHON_VERSION" .venv
+    # --managed-python: uv's own Python, never a conda or Homebrew one on PATH
+    uv venv --managed-python --python "$PYTHON_VERSION" .venv
 fi
 
 say "Building and installing FIRM3D (compiles the C++/Metal extension: a few minutes)"
