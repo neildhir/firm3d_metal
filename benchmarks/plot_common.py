@@ -85,6 +85,7 @@ class Headline:
     first_run: datetime  # of the machine: orders the at-a-glance table
     label: str
     columns: dict[str, str]  # column title -> cell
+    run_created: datetime  # of the run the numbers come from
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,9 @@ class Tables:
 
 def headline(series: Series, columns: dict[str, str]) -> tuple[tuple, Headline]:
     """One machine's at-a-glance entry, keyed for Tables.headline."""
-    return series.run.machine_key, Headline(series.first_run, series.label, columns)
+    return series.run.machine_key, Headline(
+        series.first_run, series.label, columns, series.run.created
+    )
 
 
 def load_runs(bench_dir: Path) -> list[Run]:

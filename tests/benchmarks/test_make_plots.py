@@ -63,17 +63,30 @@ class TestGlanceTable(unittest.TestCase):
         early = datetime.fromisoformat("2026-11-01T10:00:00+00:00")
         late = datetime.fromisoformat("2026-11-03T10:00:00+00:00")
         loss: dict[tuple[str | int, ...], Headline] = {
-            ("a",): Headline(late, "Mac A", {"Loss": "6.7×"})
+            ("a",): Headline(late, "Mac A", {"Loss": "6.7×"}, late)
         }
         conservation: dict[tuple[str | int, ...], Headline] = {
-            ("a",): Headline(late, "Mac A", {"Drift": "2e-6"}),
-            ("b",): Headline(early, "Mac B", {"Drift": "3e-6"}),
+            ("a",): Headline(late, "Mac A", {"Drift": "2e-6"}, late),
+            ("b",): Headline(early, "Mac B", {"Drift": "3e-6"}, early),
         }
         lines = mp.glance_table([loss, conservation]).splitlines()
         self.assertEqual(lines[1], "| Machine | Loss | Drift |")
         self.assertEqual(lines[3], "| Mac B | — | 3e-6 |")
         self.assertEqual(lines[4], "| Mac A | 6.7× | 2e-6 |")
         self.assertEqual(lines[0], "<!-- markdownlint-disable MD013 -->")
+
+    def test_row_named_as_in_the_latest_run(self) -> None:
+        # the label carries the macOS version, upgraded between the two runs
+        early = datetime.fromisoformat("2026-11-01T10:00:00+00:00")
+        late = datetime.fromisoformat("2026-11-03T10:00:00+00:00")
+        loss: dict[tuple[str | int, ...], Headline] = {
+            ("a",): Headline(early, "Mac A · macOS 26", {"Loss": "6.7×"}, early)
+        }
+        conservation: dict[tuple[str | int, ...], Headline] = {
+            ("a",): Headline(early, "Mac A · macOS 27", {"Drift": "2e-6"}, late)
+        }
+        lines = mp.glance_table([loss, conservation]).splitlines()
+        self.assertEqual(lines[3], "| Mac A · macOS 27 | 6.7× | 2e-6 |")
 
 
 class TestEndToEnd(unittest.TestCase):

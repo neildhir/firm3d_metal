@@ -125,8 +125,10 @@ def fill_page(path: Path, tables: dict[str, str]) -> None:
 def glance_table(headlines: list[dict[tuple[str | int, ...], Headline]]) -> str:
     """Markdown table: one row per machine, headline columns of every benchmark.
 
-    Machines are ordered by their first run of any benchmark; a machine
-    that has not run a benchmark shows "—" in its columns.
+    Machines are ordered by their first run of any benchmark and named as in
+    their latest, since a label carries the macOS version, which can change
+    between benchmarks; a machine that has not run a benchmark shows "—" in
+    its columns.
     """
     columns: list[str] = []
     rows: dict[tuple[str | int, ...], list[Headline]] = {}
@@ -141,8 +143,9 @@ def glance_table(headlines: list[dict[tuple[str | int, ...], Headline]]) -> str:
     ]
     for entries in sorted(rows.values(), key=lambda e: min(h.first_run for h in e)):
         cells = {c: v for h in entries for c, v in h.columns.items()}
+        latest = max(entries, key=lambda h: h.run_created)
         lines.append(
-            f"| {entries[0].label} | "
+            f"| {latest.label} | "
             + " | ".join(cells.get(c, "—") for c in columns)
             + " |"
         )
