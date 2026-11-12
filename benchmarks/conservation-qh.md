@@ -54,7 +54,7 @@ data.
 <!-- markdownlint-disable MD013 -->
 | Machine | CPU ranks | Best median drift, CPU | Best median drift, GPU | Tracing to the GPU's best, CPU / GPU | Speedup | With field builds |
 | --- | --- | --- | --- | --- | --- | --- |
-| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 10 | 1.7e-07 (64³, tol 1e-10) | 1.9e-06 (32³, tol 1e-8) | 3.65 s (32³, tol 1e-8) / 0.78 s (32³, tol 1e-8) | 4.7× | 1.1× |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2 | 10 | 1.7e-07 (64³, tol 1e-10) | 1.9e-06 (32³, tol 1e-8) | 3.29 s (32³, tol 1e-8) / 0.72 s (32³, tol 1e-8) | 4.6× | 1.0× |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:summary -->
 
@@ -112,7 +112,7 @@ bitwise identical between them.
 <!-- markdownlint-disable MD013 -->
 | Machine | GPU drifts vs reference GPU | CPU drifts vs reference CPU |
 | --- | --- | --- |
-| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | reference | reference |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2 | reference | reference |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:agreement -->
 
