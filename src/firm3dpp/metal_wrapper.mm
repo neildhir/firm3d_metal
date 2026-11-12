@@ -17,10 +17,12 @@
 #import <Metal/Metal.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <strings.h>
+#include <unistd.h>
 #include <vector>
 
 #include <pybind11/numpy.h>
@@ -209,6 +211,31 @@ id<MTLBuffer> make_buffer(id<MTLDevice> device, size_t bytes, const void* data,
     return buffer;
 }
 
+// The field table is the one large input, passed again on every launch, so
+// the GPU reads it in place when Metal allows that: memory that starts on a
+// page boundary and spans whole pages, as CatapultBoozerField allocates its
+// table. Any other array is copied. The caller holds the array for the whole
+// launch, and the kernels only read it.
+id<MTLBuffer> table_buffer(id<MTLDevice> device, py::array_t<float>& quad_pts) {
+    const float* data = quad_pts.data();
+    const size_t bytes = quad_pts.size() * sizeof(float);
+    const size_t page = (size_t)getpagesize();
+    id<MTLBuffer> buffer = nil;
+    if (bytes > 0 && bytes % page == 0 && (uintptr_t)data % page == 0 &&
+        bytes <= device.maxBufferLength) {
+        buffer = [device newBufferWithBytesNoCopy:const_cast<float*>(data)
+                                           length:bytes
+                                          options:MTLResourceStorageModeShared
+                                      deallocator:nil];
+    }
+    if (profile_stats().enabled) {
+        fprintf(stderr, "[metal-profile] field table: %zu bytes, %s\n", bytes,
+                buffer != nil ? "read in place" : "copied");
+    }
+    return buffer != nil ? buffer
+                         : make_buffer(device, bytes, data, "the field table");
+}
+
 void run_command(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline,
                  NSArray<id<MTLBuffer>>* buffers, const TraceParams& params,
                  int params_index, int nblocks) {
@@ -344,8 +371,7 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
 
         id<MTLBuffer> state_b = make_buffer(ctx.device, 4*n*sizeof(float),
                                             state.data(), "the particle state");
-        id<MTLBuffer> quad_b = make_buffer(ctx.device, quad_pts.size()*sizeof(float),
-                                           array_ptr(quad_pts), "the field table");
+        id<MTLBuffer> quad_b = table_buffer(ctx.device, quad_pts);
         id<MTLBuffer> derivs_b = make_buffer(
             ctx.device,
             (size_t)nblocks*PARTICLES_PER_BLOCK*7*N_DERIV_OUTPUTS*sizeof(float),
@@ -477,8 +503,7 @@ py::array_t<float> test_gpu_interpolation<float>(py::array_t<float> quad_pts,
         params.nparticles = n_points;
         params.rhs_id = rhs_id;
 
-        id<MTLBuffer> quad_b = make_buffer(ctx.device, quad_pts.size()*sizeof(float),
-                                           array_ptr(quad_pts), "the field table");
+        id<MTLBuffer> quad_b = table_buffer(ctx.device, quad_pts);
         id<MTLBuffer> loc_b = make_buffer(ctx.device, 3*(size_t)n_points*sizeof(float),
                                           loc_arr, "the evaluation points");
         id<MTLBuffer> out_b = make_buffer(ctx.device,
@@ -541,8 +566,7 @@ py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts,
         int nblocks = n_points / PARTICLES_PER_BLOCK + 1;
         vector<float> minus_one(n, -1.0f);
 
-        id<MTLBuffer> quad_b = make_buffer(ctx.device, quad_pts.size()*sizeof(float),
-                                           array_ptr(quad_pts), "the field table");
+        id<MTLBuffer> quad_b = table_buffer(ctx.device, quad_pts);
         id<MTLBuffer> state_b = make_buffer(ctx.device, 4*n*sizeof(float),
                                             init_pos.data(), "the particle state");
         id<MTLBuffer> t_b = make_buffer(ctx.device, n*sizeof(float), nullptr, "t");

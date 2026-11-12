@@ -408,6 +408,48 @@ class TestMetalTracingBoozerSplineNoK(unittest.TestCase):
         )
 
 
+# Setup for the scripts that trace in a fresh interpreter: the wrapper reads
+# its FIRM3D_METAL_* settings once per process. trace() returns the final
+# states, and each script saves its result to the file it is given.
+FRESH_TRACE_SETUP = (
+    "import sys\n"
+    "import numpy as np\n"
+    "from firm3d.catapult.field import CatapultBoozerField\n"
+    "from firm3d.catapult.tracing import trace_particles_boozer_gpu\n"
+    "from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as q\n"
+    "from firm3d.util.constants import ALPHA_PARTICLE_MASS as m\n"
+    "from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as E\n"
+    "from tests.field.test_gpu import get_field, sample_test_points\n"
+    "bri, field, nfp = get_field("
+    "'examples/inputs/boozmn_aten_rescaled_low_res.nc', 8, False)\n"
+    "cfield = CatapultBoozerField(field, 8, 8, 8, precision='single')\n"
+    "stz = sample_test_points(64)\n"
+    "stz = np.ascontiguousarray(stz[stz[:, 0] < 1.0][:13])\n"
+    "v = np.sqrt(2 * E / m)\n"
+    "vpar = np.random.default_rng(3).uniform(-v, v, len(stz))\n"
+    "def trace():\n"
+    "    res_tys, _ = trace_particles_boozer_gpu(cfield, stz, vpar, tmax=1e-6, "
+    "mass=m, charge=q, Ekin=E, tol=1e-8, forget_exact_path=True)\n"
+    "    return np.array([ty[-1] for ty in res_tys])\n"
+)
+
+
+def run_fresh_interpreter(script: str, env: dict[str, str]) -> tuple[np.ndarray, str]:
+    """Run script in a new interpreter; return the array it saved, and stderr."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out.npy"
+        proc = subprocess.run(
+            [sys.executable, "-c", script, str(out)],
+            env=env,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parents[2],
+        )
+        if proc.returncode != 0:
+            raise AssertionError(proc.stderr)
+        return np.load(out), proc.stderr
+
+
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")
 class TestMetalDispatchChunking(unittest.TestCase):
     """
@@ -415,30 +457,9 @@ class TestMetalDispatchChunking(unittest.TestCase):
     steps each, keeping every particle's state, step size and
     first-same-as-last derivative in device buffers in between. However the
     trace is split, it must come out bitwise the same as in one dispatch.
-    The wrapper reads the variable once, so each case runs in a fresh
-    interpreter, which saves its final states to the file it is given.
     """
 
-    SCRIPT = (
-        "import sys\n"
-        "import numpy as np\n"
-        "from firm3d.catapult.field import CatapultBoozerField\n"
-        "from firm3d.catapult.tracing import trace_particles_boozer_gpu\n"
-        "from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as q\n"
-        "from firm3d.util.constants import ALPHA_PARTICLE_MASS as m\n"
-        "from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as E\n"
-        "from tests.field.test_gpu import get_field, sample_test_points\n"
-        "bri, field, nfp = get_field("
-        "'examples/inputs/boozmn_aten_rescaled_low_res.nc', 8, False)\n"
-        "cfield = CatapultBoozerField(field, 8, 8, 8, precision='single')\n"
-        "stz = sample_test_points(64)\n"
-        "stz = np.ascontiguousarray(stz[stz[:, 0] < 1.0][:13])\n"
-        "v = np.sqrt(2 * E / m)\n"
-        "vpar = np.random.default_rng(3).uniform(-v, v, len(stz))\n"
-        "res_tys, _ = trace_particles_boozer_gpu(cfield, stz, vpar, tmax=1e-6, "
-        "mass=m, charge=q, Ekin=E, tol=1e-8, forget_exact_path=True)\n"
-        "np.save(sys.argv[1], np.array([ty[-1] for ty in res_tys]))\n"
-    )
+    SCRIPT = FRESH_TRACE_SETUP + "np.save(sys.argv[1], trace())\n"
 
     def trace(self, max_steps: str | None) -> tuple[np.ndarray, int]:
         """Final states, and the number of dispatches the trace took."""
@@ -446,19 +467,9 @@ class TestMetalDispatchChunking(unittest.TestCase):
         env.pop("FIRM3D_METAL_MAX_STEPS", None)
         if max_steps is not None:
             env["FIRM3D_METAL_MAX_STEPS"] = max_steps
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "final.npy"
-            proc = subprocess.run(
-                [sys.executable, "-c", self.SCRIPT, str(out)],
-                env=env,
-                capture_output=True,
-                text=True,
-                cwd=Path(__file__).parents[2],
-            )
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            final = np.load(out)
-        dispatches = re.findall(r"trace: \d+ particles, (\d+) dispatches", proc.stderr)
-        self.assertEqual(len(dispatches), 1, proc.stderr)
+        final, stderr = run_fresh_interpreter(self.SCRIPT, env)
+        dispatches = re.findall(r"trace: \d+ particles, (\d+) dispatches", stderr)
+        self.assertEqual(len(dispatches), 1, stderr)
         return final, int(dispatches[0])
 
     def test_split_trace_is_bitwise_identical(self):
@@ -470,6 +481,32 @@ class TestMetalDispatchChunking(unittest.TestCase):
             np.testing.assert_array_equal(
                 split, whole, err_msg=f"FIRM3D_METAL_MAX_STEPS={max_steps}"
             )
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalFieldTable(unittest.TestCase):
+    """
+    The GPU reads a CatapultBoozerField's table in place, and copies any
+    other array on every launch: at high resolution those copies, one per
+    saved interval, were most of a trace's wall time. Both paths must trace
+    bitwise alike; FIRM3D_METAL_PROFILE reports which one a launch took.
+    """
+
+    SCRIPT = FRESH_TRACE_SETUP + (
+        "in_place = trace()\n"
+        "# the same table one float past a page boundary, which Metal copies\n"
+        "shifted = np.empty(cfield.quad_pts.size + 1, dtype=np.float32)[1:]\n"
+        "shifted[:] = cfield.quad_pts\n"
+        "cfield.quad_pts = shifted\n"
+        "np.save(sys.argv[1], np.stack([in_place, trace()]))\n"
+    )
+
+    def test_in_place_and_copied_tables_trace_alike(self):
+        env = dict(os.environ, FIRM3D_METAL_PROFILE="1")
+        (in_place, copied), stderr = run_fresh_interpreter(self.SCRIPT, env)
+        paths = re.findall(r"field table: \d+ bytes, ([a-z ]+)", stderr)
+        self.assertEqual(paths, ["read in place", "copied"], stderr)
+        np.testing.assert_array_equal(copied, in_place)
 
 
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")

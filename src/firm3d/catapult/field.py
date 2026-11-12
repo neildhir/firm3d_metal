@@ -4,6 +4,8 @@ __all__ = [
     "CatapultCartesianField",
 ]
 
+import mmap
+
 import numpy as np
 
 from firm3d.catapult.utils import (
@@ -30,6 +32,19 @@ def _dtype_from_precision(precision):
     if dtype not in (np.float32, np.float64):
         raise ValueError(f"precision must be 'double' or 'single', got {precision!r}")
     return dtype
+
+
+def _page_aligned_table(quad_info):
+    """
+    Copy a table into anonymous mmap memory, which starts on a page boundary,
+    padded to whole pages. Return it with quad_info's shape, and flat with the
+    padding, as the kernels take it: the Metal backend reads memory laid out
+    so in place, where it would copy any other array on every launch.
+    """
+    nbytes = -(-quad_info.nbytes // mmap.PAGESIZE) * mmap.PAGESIZE
+    flat = np.frombuffer(mmap.mmap(-1, nbytes), dtype=quad_info.dtype)
+    flat[: quad_info.size] = quad_info.ravel()
+    return flat[: quad_info.size].reshape(quad_info.shape), flat
 
 
 class _CatapultBoozerTable:
@@ -86,6 +101,8 @@ class CatapultBoozerField(_CatapultBoozerTable):
         srange, trange, zrange: ``(start, end, npoints)`` of the grid in each
             coordinate.
         quad_info: The tabulated field, in ``dtype``.
+        quad_pts: The same table, flat and padded to whole memory pages, as
+            the kernels take it.
         maxJ: The largest Jacobian seen on the grid, for rejection sampling
             of positions.
         field_type, vacuum, nfp, psi0: Taken from the field.
@@ -99,7 +116,7 @@ class CatapultBoozerField(_CatapultBoozerTable):
             )
         super().__init__(field, ns, ntheta, nzeta, precision, ("vac", "", "nok"))
         self.field = field
-        self.srange, self.trange, self.zrange, self.quad_info, self.maxJ = (
+        self.srange, self.trange, self.zrange, quad_info, self.maxJ = (
             boozer_interpolant(
                 field,
                 field.nfp,
@@ -110,6 +127,7 @@ class CatapultBoozerField(_CatapultBoozerTable):
                 dtype=self.dtype,
             )
         )
+        self.quad_info, self.quad_pts = _page_aligned_table(quad_info)
 
 
 class CatapultPerturbedBoozerField(_CatapultBoozerTable):
@@ -141,6 +159,8 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
         srange, trange, zrange: ``(start, end, npoints)`` of the grid in each
             coordinate.
         quad_info: The tabulated equilibrium, in ``dtype``.
+        quad_pts: The same table, flat and padded to whole memory pages, as
+            the kernels take it.
         maxJ: The largest Jacobian seen on the grid, for rejection sampling
             of positions.
         field_type, vacuum, nfp, psi0: Taken from the equilibrium.
@@ -158,9 +178,10 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
         super().__init__(B0, ns, ntheta, nzeta, precision, ("vac", "nok"))
         self.perturbed_field = perturbed_field
         self.B0 = B0
-        self.srange, self.trange, self.zrange, self.quad_info, self.maxJ = (
+        self.srange, self.trange, self.zrange, quad_info, self.maxJ = (
             boozer_saw_interpolant(B0, B0.nfp, ns, ntheta, nzeta, dtype=self.dtype)
         )
+        self.quad_info, self.quad_pts = _page_aligned_table(quad_info)
         waves = [perturbed_field.get_wave(i) for i in range(len(perturbed_field))]
         self.saw_nharmonics = len(waves)
         self.saw_omega = waves[0].omega

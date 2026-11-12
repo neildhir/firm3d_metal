@@ -72,7 +72,7 @@ def _launch_boozer(
         nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
     )
     kwargs = {
-        "quad_pts": cfield.quad_info,
+        "quad_pts": cfield.quad_pts,
         "srange": cfield.srange,
         "trange": cfield.trange,
         "zrange": cfield.zrange,

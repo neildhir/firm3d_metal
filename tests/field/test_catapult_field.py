@@ -1,3 +1,4 @@
+import mmap
 import unittest
 from pathlib import Path
 
@@ -72,6 +73,17 @@ class TestCatapultBoozerField(unittest.TestCase):
             CatapultBoozerField(self.field, *RESOLUTION, precision=np.float32).dtype,
             np.float32,
         )
+
+    def test_table_spans_whole_pages(self):
+        # the Metal backend reads a table laid out so in place, instead of
+        # copying it to the GPU on every launch
+        cfield = CatapultBoozerField(self.field, *RESOLUTION, precision="single")
+        quad_pts, n = cfield.quad_pts, cfield.quad_info.size
+        self.assertEqual(quad_pts.ctypes.data % mmap.PAGESIZE, 0)
+        self.assertEqual(quad_pts.nbytes % mmap.PAGESIZE, 0)
+        self.assertTrue(np.shares_memory(cfield.quad_info, quad_pts))
+        np.testing.assert_array_equal(quad_pts[:n], cfield.quad_info.ravel())
+        np.testing.assert_array_equal(quad_pts[n:], 0)
 
     def test_finite_beta(self):
         field = BoozerRadialInterpolant(filename_mhd, 3)
