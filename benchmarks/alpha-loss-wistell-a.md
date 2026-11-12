@@ -39,7 +39,7 @@ Two workloads, defined once in `alpha-loss-wistell-a.yaml`:
 <!-- markdownlint-disable MD013 -->
 | Machine | CPU ranks | 10,000 × 1 ms: CPU / GPU | Speedup | 5,000 × 10 ms: CPU / GPU | Speedup | Lost, CPU / GPU |
 | --- | --- | --- | --- | --- | --- | --- |
-| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 10 | 32.0 s / 4.9 s | 6.6× | 176.6 s / 26.2 s | 6.7× | 44 / 42 |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2 | 10 | 30.2 s / 4.9 s | 6.1× | 151.7 s / 25.7 s | 5.9× | 44 / 42 |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:summary -->
 
@@ -72,7 +72,7 @@ comparison, free of each machine's CPU baseline.*
 <!-- markdownlint-disable MD013 -->
 | Machine | CPU vs GPU | Reference GPU vs GPU | Reference CPU vs CPU | Check |
 | --- | --- | --- | --- | --- |
-| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 26.6.2 | 8 fates differ (5 / 3), p 0.73; losses -5% (95% CI -15% to +9%); loss time ×1.001, p 0.39 | reference | reference | pass |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2 | 8 fates differ (5 / 3), p 0.73; losses -5% (95% CI -15% to +9%); loss time ×1.001, p 0.39 | reference | reference | pass |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:physics -->
 
