@@ -383,7 +383,11 @@ inline void dp5_one_step(int deriv_id,
     threadgroup_barrier(mem_flags::mem_threadgroup);
     calc_derivs(deriv_id, derivs, quadpts_arr, x_temp, symmetry_exploited,
                 cell_index_start, shape_fun_vals, mu, is_valid, block_interpolants, P, tid);
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // derivs is device memory, written by one thread per particle and read by
+    // the four threads of its state variables in the next stage and in
+    // adjust_time; a threadgroup-only fence would not order it (CUDA's
+    // __syncthreads orders global memory too)
+    threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
 }
 
 // Maximum allowable timestep: at most a quarter revolution per step.
@@ -638,7 +642,9 @@ kernel void trace_boozer(device float* state_g [[buffer(0)]],
         }
         adjust_time(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
                     has_left, block_dtmax, is_valid_arr, P, tid);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // orders adjust_time's reads of derivs, and its first-same-as-last
+        // copy, before the next step's writes by other threads
+        threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
     }
 
     if (is_valid) {
