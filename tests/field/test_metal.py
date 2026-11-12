@@ -1,6 +1,8 @@
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,12 +16,14 @@ from firm3d.catapult.tracing import (
 )
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
+    BoozerSplineField,
     InterpolatedBoozerField,
 )
 from firm3d.field.tracing import (
     MaxToroidalFluxStoppingCriterion,
     trace_particles_boozer,
 )
+from firm3d.trajectory_helpers import compute_peta
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE as CHARGE,
 )
@@ -134,7 +138,9 @@ class TestMetalTracingBoozerVacuum(unittest.TestCase):
         self.stz = sample_test_points(n_test_pts)
 
         self.VELOCITY = np.sqrt(2 * ENERGY / MASS)
-        self.vpar_init = np.random.uniform(-self.VELOCITY, self.VELOCITY, (n_test_pts,))
+        self.vpar_init = np.random.default_rng(1).uniform(
+            -self.VELOCITY, self.VELOCITY, n_test_pts
+        )
 
         self.field = CATAPULTField(
             self.field,
@@ -280,7 +286,7 @@ class TestMetalTracingBoozerNoK(unittest.TestCase):
         )
         self.stz = sample_test_points(n_test_pts)
         velocity = np.sqrt(2 * ENERGY / MASS)
-        self.vpar = np.random.uniform(-velocity, velocity, (n_test_pts,))
+        self.vpar = np.random.default_rng(1).uniform(-velocity, velocity, n_test_pts)
 
     def test_tabulates_with_finite_beta_rhs(self):
         res = self.res
@@ -293,6 +299,177 @@ class TestMetalTracingBoozerNoK(unittest.TestCase):
         assert_tracing_matches_cpu(
             self, self.field, self.res, self.stz[inside][:64], self.vpar[inside][:64]
         )
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalTracingBoozerSplineNoK(unittest.TestCase):
+    """
+    The conservation benchmark's field: a quasi-symmetric BoozerSplineField
+    of type "nok", tabulated straight from its splines rather than through
+    an InterpolatedBoozerField. In an exactly quasi-symmetric field p_eta is
+    conserved, so its drift, measured on the exact field, is the tracers'
+    numerical error. As in the benchmark, the CPU traces the interpolant of
+    the same field, and the two median drifts must agree; they agree to
+    within 10% here, and the benchmark's own tripwire is a factor of 10.
+    """
+
+    HELICITY_M, HELICITY_N = 1, -4
+    FACTOR = 2.0
+
+    def setUp(self):
+        self.res = 8
+        # a coarse spline grid keeps setup to seconds; it breaks the
+        # symmetry slightly, which both tracers see alike
+        self.spline = BoozerSplineField(
+            "examples/inputs/boozmn_beta2.5_QH.nc",
+            ntheta=16,
+            nzeta=16,
+            helicity_M=self.HELICITY_M,
+            helicity_N=self.HELICITY_N,
+        )
+        stz = sample_test_points(128)
+        # away from the edge, so that the markers survive to tmax
+        self.stz = np.ascontiguousarray(stz[stz[:, 0] < 0.9][:32])
+        velocity = np.sqrt(2 * ENERGY / MASS)
+        self.vpar = np.random.default_rng(1).uniform(-velocity, velocity, 32)
+        self.tmax = 1e-4
+
+    def peta(self, points: np.ndarray, vpar: np.ndarray) -> np.ndarray:
+        return compute_peta(
+            self.spline,
+            np.ascontiguousarray(points),
+            np.ascontiguousarray(vpar),
+            MASS,
+            CHARGE,
+            self.HELICITY_M,
+            self.HELICITY_N,
+        )
+
+    def test_tabulates_with_finite_beta_rhs(self):
+        res = self.res
+        cfield = CatapultBoozerField(self.spline, res, res, res, precision="single")
+        self.assertEqual(cfield.field_type, "nok")
+        self.assertFalse(cfield.vacuum)
+
+    def test_peta_drift_matches_cpu(self):
+        res, tol = self.res, 1e-6
+        cfield = CatapultBoozerField(self.spline, res, res, res, precision="single")
+        gpu, _ = trace_particles_boozer_gpu(
+            cfield,
+            self.stz,
+            self.vpar,
+            tmax=self.tmax,
+            mass=MASS,
+            charge=CHARGE,
+            Ekin=ENERGY,
+            tol=tol,
+            forget_exact_path=True,
+        )
+        interp = InterpolatedBoozerField(
+            self.spline,
+            3,
+            ns_interp=res,
+            ntheta_interp=res,
+            nzeta_interp=res,
+            nfp=self.spline.nfp,
+            stellsym=self.spline.stellsym,
+        )
+        cpu, _ = trace_particles_boozer(
+            interp,
+            self.stz,
+            self.vpar,
+            tmax=self.tmax,
+            mass=MASS,
+            charge=CHARGE,
+            Ekin=ENERGY,
+            abstol=tol,
+            reltol=tol,
+            stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+            forget_exact_path=True,
+        )
+
+        peta0 = self.peta(self.stz, self.vpar)
+        if self.spline.psi0 is None:
+            self.fail("the spline field has no psi0, the scale of p_eta")
+        scale = CHARGE * abs(self.spline.psi0)
+        drifts = []
+        for res_tys in (gpu, cpu):
+            final = np.array([ty[-1] for ty in res_tys])
+            self.assertTrue(
+                np.all(final[:, 0] >= 0.999 * self.tmax), "a marker was lost"
+            )
+            drifts.append(np.abs(self.peta(final[:, 1:4], final[:, 4]) - peta0) / scale)
+        d_gpu, d_cpu = (np.median(d) for d in drifts)
+        self.assertGreater(d_cpu, 0.0)
+        self.assertLessEqual(
+            max(d_gpu / d_cpu, d_cpu / d_gpu),
+            self.FACTOR,
+            f"median p_eta drift: Metal {d_gpu:.3e}, CPU {d_cpu:.3e}",
+        )
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalDispatchChunking(unittest.TestCase):
+    """
+    The host splits a trace into dispatches of at most FIRM3D_METAL_MAX_STEPS
+    steps each, keeping every particle's state, step size and
+    first-same-as-last derivative in device buffers in between. However the
+    trace is split, it must come out bitwise the same as in one dispatch.
+    The wrapper reads the variable once, so each case runs in a fresh
+    interpreter, which saves its final states to the file it is given.
+    """
+
+    SCRIPT = (
+        "import sys\n"
+        "import numpy as np\n"
+        "from firm3d.catapult.field import CatapultBoozerField\n"
+        "from firm3d.catapult.tracing import trace_particles_boozer_gpu\n"
+        "from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as q\n"
+        "from firm3d.util.constants import ALPHA_PARTICLE_MASS as m\n"
+        "from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as E\n"
+        "from tests.field.test_gpu import get_field, sample_test_points\n"
+        "bri, field, nfp = get_field("
+        "'examples/inputs/boozmn_aten_rescaled_low_res.nc', 8, False)\n"
+        "cfield = CatapultBoozerField(field, 8, 8, 8, precision='single')\n"
+        "stz = sample_test_points(64)\n"
+        "stz = np.ascontiguousarray(stz[stz[:, 0] < 1.0][:13])\n"
+        "v = np.sqrt(2 * E / m)\n"
+        "vpar = np.random.default_rng(3).uniform(-v, v, len(stz))\n"
+        "res_tys, _ = trace_particles_boozer_gpu(cfield, stz, vpar, tmax=1e-6, "
+        "mass=m, charge=q, Ekin=E, tol=1e-8, forget_exact_path=True)\n"
+        "np.save(sys.argv[1], np.array([ty[-1] for ty in res_tys]))\n"
+    )
+
+    def trace(self, max_steps: str | None) -> tuple[np.ndarray, int]:
+        """Final states, and the number of dispatches the trace took."""
+        env = dict(os.environ, FIRM3D_METAL_PROFILE="1")
+        env.pop("FIRM3D_METAL_MAX_STEPS", None)
+        if max_steps is not None:
+            env["FIRM3D_METAL_MAX_STEPS"] = max_steps
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "final.npy"
+            proc = subprocess.run(
+                [sys.executable, "-c", self.SCRIPT, str(out)],
+                env=env,
+                capture_output=True,
+                text=True,
+                cwd=Path(__file__).parents[2],
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            final = np.load(out)
+        dispatches = re.findall(r"trace: \d+ particles, (\d+) dispatches", proc.stderr)
+        self.assertEqual(len(dispatches), 1, proc.stderr)
+        return final, int(dispatches[0])
+
+    def test_split_trace_is_bitwise_identical(self):
+        whole, n_whole = self.trace(None)
+        self.assertEqual(n_whole, 1, "the default must fit this trace in one dispatch")
+        for max_steps in ("1", "7"):
+            split, n_split = self.trace(max_steps)
+            self.assertGreater(n_split, 1, f"FIRM3D_METAL_MAX_STEPS={max_steps}")
+            np.testing.assert_array_equal(
+                split, whole, err_msg=f"FIRM3D_METAL_MAX_STEPS={max_steps}"
+            )
 
 
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")
