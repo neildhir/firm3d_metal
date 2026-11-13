@@ -188,5 +188,7 @@ template<> py::array_t<float> test_gpu_interpolation<float>(py::array_t<float> q
 template<> py::array_t<double> test_gpu_interpolation<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, std::string coordinates, int n_points);
 template<> py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, double psi0, int n_points, bool vacuum);
 template<> py::array_t<double> test_derivatives_boozer<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, double psi0, int n_points, bool vacuum);
+// SHA-256 of the Metal sources (kernel, then wrapper) this build compiled.
+const char* metal_sources_sha256();
 #endif
 #endif

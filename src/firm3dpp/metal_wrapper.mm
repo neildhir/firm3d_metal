@@ -321,6 +321,10 @@ T* array_ptr(py::array_t<T>& x) {
 // USE_METAL; signatures must match the CUDA primary template exactly.
 #include "tracing.h"
 
+const char* metal_sources_sha256() {
+    return FIRM3D_METAL_SOURCES_SHA256;
+}
+
 template <>
 vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
                                         py::array_t<double> srange,

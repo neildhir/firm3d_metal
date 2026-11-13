@@ -619,6 +619,7 @@ void init_tracing(py::module_ &m){
         );
 
     m.attr("gpu_backend") = "metal";
+    m.attr("metal_sources_sha256") = metal_sources_sha256();
 #endif
 
 

@@ -44,8 +44,7 @@ BENCH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCH_DIR.parent
 RESULTS_DIR = BENCH_DIR / "results"
 INSTALL_SCRIPT = "install/macOS/install_firm3d_metal.sh"
-METAL_KERNEL = "src/firm3dpp/metal_kernel.metal"
-METAL_SOURCES = (METAL_KERNEL, "src/firm3dpp/metal_wrapper.mm")
+METAL_SOURCES = ("src/firm3dpp/metal_kernel.metal", "src/firm3dpp/metal_wrapper.mm")
 
 # Pause between the CPU and GPU legs [s], so that the GPU leg does not start
 # on a machine heat-soaked by the CPU leg (sustained load costs the M4 ~8%).
@@ -164,7 +163,11 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
             f"firm3dpp was built without Metal (gpu_backend = {backend!r}); "
             f"run {INSTALL_SCRIPT}"
         )
-    problem = build_problem(firm3dpp.__file__, (REPO_ROOT / METAL_KERNEL).read_bytes())
+    problem = build_problem(
+        firm3dpp.__file__,
+        getattr(firm3dpp, "metal_sources_sha256", None),
+        metal_sources_sha256(),
+    )
     if problem is not None:
         sys.exit(f"{problem}; re-run {INSTALL_SCRIPT}")
     knobs = sorted(k for k in os.environ if k.startswith("FIRM3D_METAL_"))
@@ -203,15 +206,20 @@ def preflight(allow_dirty: bool) -> dict[str, Any]:
     return now
 
 
-def build_problem(built: str | None, kernel: bytes) -> str | None:
+def build_problem(
+    built: str | None, built_sources: str | None, sources: str
+) -> str | None:
     """Why the built extension must not be benchmarked, if it must not.
 
     Parameters
     ----------
     built : str or None
         Path of the built firm3dpp extension (``firm3dpp.__file__``).
-    kernel : bytes
-        The checkout's Metal kernel source.
+    built_sources : str or None
+        The Metal sources hash the build embedded
+        (``firm3dpp.metal_sources_sha256``; None for builds that predate it).
+    sources : str
+        The checkout's Metal sources hash (``metal_sources_sha256()``).
 
     Returns
     -------
@@ -220,11 +228,11 @@ def build_problem(built: str | None, kernel: bytes) -> str | None:
     """
     if built is None:
         return "cannot locate the built firm3dpp extension"
+    # Both sources are compiled into the extension, so a build that predates
+    # the last `git pull` would run old Metal code under the new fingerprint.
+    if built_sources != sources:
+        return "the built Metal code is stale (it differs from the checkout's)"
     binary = Path(built).read_bytes()
-    # The kernel source is embedded verbatim in the extension, so a build that
-    # predates the last `git pull` shows up as a mismatch here.
-    if kernel not in binary:
-        return f"the built Metal kernel is stale (it differs from {METAL_KERNEL})"
     # An OpenMP build segfaults alongside the libomp booz_xform bundles (see
     # the install script). The extension names the libomp it links.
     if b"libomp.dylib" in binary:
@@ -302,10 +310,15 @@ def fingerprints(cfg: dict[str, Any]) -> dict[str, str]:
     return {
         "config": hashlib.sha256(canonical).hexdigest(),
         "equilibrium": sha256_file(BENCH_DIR / cfg["boozmn_file"]),
-        "metal_sources": hashlib.sha256(
-            b"".join((REPO_ROOT / p).read_bytes() for p in METAL_SOURCES)
-        ).hexdigest(),
+        "metal_sources": metal_sources_sha256(),
     }
+
+
+def metal_sources_sha256() -> str:
+    """SHA-256 of the checkout's Metal sources, as the build embeds it."""
+    return hashlib.sha256(
+        b"".join((REPO_ROOT / p).read_bytes() for p in METAL_SOURCES)
+    ).hexdigest()
 
 
 def software() -> dict[str, Any]:

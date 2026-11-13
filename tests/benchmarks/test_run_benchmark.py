@@ -34,28 +34,29 @@ class TestCpuRanks(unittest.TestCase):
 
 
 class TestBuildProblem(unittest.TestCase):
-    KERNEL = b"kernel void trace_boozer() {}"
+    SOURCES = "a" * 64
 
-    def problem(self, binary: bytes) -> str | None:
+    def problem(self, binary: bytes, built_sources: str | None) -> str | None:
         with tempfile.TemporaryDirectory() as tmp:
             built = Path(tmp) / "firm3dpp.so"
             built.write_bytes(binary)
-            return rb.build_problem(str(built), self.KERNEL)
+            return rb.build_problem(str(built), built_sources, self.SOURCES)
 
     def test_current_build_passes(self) -> None:
-        self.assertIsNone(self.problem(b"head" + self.KERNEL + b"tail"))
+        self.assertIsNone(self.problem(b"binary", self.SOURCES))
 
-    def test_stale_kernel_is_refused(self) -> None:
-        problem = self.problem(b"head kernel void trace_boozer_old() {} tail")
-        self.assertIn("stale", problem or "")
+    def test_stale_build_is_refused(self) -> None:
+        for built_sources in ("b" * 64, None):  # None: built before the hash
+            problem = self.problem(b"binary", built_sources)
+            self.assertIn("stale", problem or "", built_sources)
 
     def test_openmp_build_is_refused(self) -> None:
         # what a build linking Homebrew's libomp carries in its load commands
-        binary = self.KERNEL + b"/opt/homebrew/opt/libomp/lib/libomp.dylib"
-        self.assertIn("OpenMP", self.problem(binary) or "")
+        binary = b"binary /opt/homebrew/opt/libomp/lib/libomp.dylib"
+        self.assertIn("OpenMP", self.problem(binary, self.SOURCES) or "")
 
     def test_unlocated_build_is_refused(self) -> None:
-        self.assertIsNotNone(rb.build_problem(None, self.KERNEL))
+        self.assertIsNotNone(rb.build_problem(None, self.SOURCES, self.SOURCES))
 
 
 class TestCpuCommand(unittest.TestCase):
