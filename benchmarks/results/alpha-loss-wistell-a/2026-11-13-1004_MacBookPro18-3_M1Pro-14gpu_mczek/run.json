@@ -1,0 +1,135 @@
+{
+  "benchmark": "alpha-loss-wistell-a",
+  "kind": "loss",
+  "run_id": "2026-11-13-1004_MacBookPro18-3_M1Pro-14gpu_mczek",
+  "created": "2026-11-13T10:04:05-05:00",
+  "tag": "mczek",
+  "machine": {
+    "model_name": "MacBook Pro",
+    "model_identifier": "MacBookPro18,3",
+    "chip": "Apple M1 Pro",
+    "cpu_cores": 10,
+    "cpu_performance_cores": 8,
+    "cpu_efficiency_cores": 2,
+    "gpu_cores": 14,
+    "memory_gb": 32,
+    "macos": "26.6.2",
+    "macos_build": "25G83"
+  },
+  "mpi_ranks": 10,
+  "conditions_at_launch": {
+    "power_source": "AC Power",
+    "low_power_mode": false,
+    "thermal_state": "nominal",
+    "load_average": 4.8603515625
+  },
+  "legs": {
+    "cpu": {
+      "conditions_before": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 4.26513671875
+      },
+      "conditions_after": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 21.55908203125
+      },
+      "duration_s": 276.9595580101013
+    },
+    "metal": {
+      "conditions_before": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 8.8505859375
+      },
+      "conditions_after": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 4.94873046875
+      },
+      "duration_s": 52.18711709976196
+    }
+  },
+  "fingerprints": {
+    "config": "5c467d737c5109dbfd4bd721ef13b4c6488f056ef9c79aa794d5ffc818a44867",
+    "equilibrium": "25e0f0a8b00e142ccb1c4a24767e96a4fac09ff06ea1a49b0489cbbe9068dcac",
+    "metal_sources": "e93aba828ef8a66770dbd8dd64bdffb67b7a05a8729cfd0874cf0db1c19ad07e"
+  },
+  "software": {
+    "commit": "a4d755247895d4b1dbe63c1a02f66409b8071329",
+    "dirty": false,
+    "python": "3.12.16",
+    "mpi": "mpiexec (Open MPI) 5.0.7"
+  },
+  "config": {
+    "description": "fusion-birth alphas, Wistell-A vacuum field (ARIES-CS scale)",
+    "boozmn_file": "../examples/inputs/boozmn_aten_rescaled.nc",
+    "interpolation": {
+      "resolution": 48,
+      "degree": 3
+    },
+    "tracing": {
+      "tmax_s": 0.001,
+      "tol": 1e-06
+    },
+    "scaling_nparticles": [
+      100,
+      500,
+      1000,
+      5000,
+      10000
+    ],
+    "validation": {
+      "nparticles": 5000,
+      "tmax_s": 0.01,
+      "tmin_s": 1e-05
+    },
+    "seed": 42
+  },
+  "sanity": {
+    "passed": true,
+    "checks": [
+      {
+        "workload": "100 x 0.001 s",
+        "n_lost_cpu": 1,
+        "n_lost_metal": 2,
+        "passed": true
+      },
+      {
+        "workload": "500 x 0.001 s",
+        "n_lost_cpu": 4,
+        "n_lost_metal": 4,
+        "passed": true
+      },
+      {
+        "workload": "1000 x 0.001 s",
+        "n_lost_cpu": 7,
+        "n_lost_metal": 8,
+        "passed": true
+      },
+      {
+        "workload": "5000 x 0.001 s",
+        "n_lost_cpu": 26,
+        "n_lost_metal": 28,
+        "passed": true
+      },
+      {
+        "workload": "10000 x 0.001 s",
+        "n_lost_cpu": 73,
+        "n_lost_metal": 72,
+        "passed": true
+      },
+      {
+        "workload": "5000 x 0.01 s (validation)",
+        "n_lost_cpu": 44,
+        "n_lost_metal": 44,
+        "passed": true
+      }
+    ]
+  }
+}
