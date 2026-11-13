@@ -8,14 +8,15 @@
 // shared storage mode, so on Apple Silicon host and GPU read the same
 // memory and there are no explicit transfers.
 //
-// The trace kernel is dispatched in bounded chunks of max_steps DP5 steps
-// (macOS limits how long a command buffer may run) with all per-particle
-// state in device buffers; the host redispatches until every particle has
-// reached its tmax or left the plasma.
+// The trace kernel is dispatched in chunks of max_steps DP5 steps, sized to
+// a fixed GPU time (macOS kills a command buffer that runs too long while the
+// display is on), with all per-particle state in device buffers; the host
+// redispatches until every particle has reached its tmax or left the plasma.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -76,21 +77,42 @@ bool env_flag(const char* name) {
            strcasecmp(v, "false") != 0 && strcasecmp(v, "off") != 0;
 }
 
-// DP5 steps per trace dispatch. Bounds command-buffer runtime below the macOS
-// GPU watchdog while keeping dispatch overhead negligible; overridable for
-// experiments via FIRM3D_METAL_MAX_STEPS.
-int max_steps_per_dispatch() {
+// GPU time each trace dispatch aims for. While the display is on, macOS kills
+// a command buffer that holds the GPU long enough to stall the window server
+// ("Impacting Interactivity"; an M1 Pro hit it in a conservation benchmark
+// whose 1000-step dispatches run 0.8 s on an M4, so a fixed step count is
+// unsafe: dispatch time grows with the table size, the particle count, and
+// the tolerance). Each dispatch costs 1-4 ms of host round trip and GPU
+// drain on an M4, about 6% of tracing time at this target.
+constexpr double TARGET_DISPATCH_S = 0.05;
+// The first dispatch's steps, short for any workload; later ones adapt.
+constexpr int FIRST_DISPATCH_STEPS = 8;
+// Bound on the int step counter, never reached at the target time.
+constexpr int MAX_DISPATCH_STEPS = 1 << 20;
+
+// DP5 steps per trace dispatch fixed by FIRM3D_METAL_MAX_STEPS, for
+// experiments; 0 when unset, and dispatches then adapt to TARGET_DISPATCH_S.
+int fixed_steps_per_dispatch() {
     static int value = [] {
         const char* env = std::getenv("FIRM3D_METAL_MAX_STEPS");
-        int steps = env ? std::atoi(env) : 1000;
-        return steps > 0 ? steps : 1000;
+        int steps = env ? std::atoi(env) : 0;
+        return steps > 0 ? steps : 0;
     }();
     return value;
 }
 
-// Safety cap on trace dispatches, so a step size collapsing to zero surfaces
-// as an error instead of an endless host loop.
-constexpr long MAX_TRACE_DISPATCHES = 1000000;
+// Steps for the next dispatch: the last one's, scaled to the target time.
+// Particles only finish, so time per step falls during a trace and the
+// scaling never overshoots; growth is capped at 2x against timer noise.
+int next_dispatch_steps(int steps, double gpu_s) {
+    double scaled = gpu_s > 0.0 ? steps * TARGET_DISPATCH_S / gpu_s : 2.0 * steps;
+    return (int)std::clamp(std::min(scaled, 2.0 * steps), 1.0,
+                           (double)MAX_DISPATCH_STEPS);
+}
+
+// Safety cap on steps per particle, so a step size collapsing to zero
+// surfaces as an error instead of an endless host loop.
+constexpr long MAX_TRACE_STEPS = 1000000000;
 
 // Dispatch profiling, enabled with FIRM3D_METAL_PROFILE=1: sums each command
 // buffer's GPU-busy interval (GPUStartTime..GPUEndTime) so kernel time can be
@@ -236,9 +258,10 @@ id<MTLBuffer> table_buffer(id<MTLDevice> device, py::array_t<float>& quad_pts) {
                          : make_buffer(device, bytes, data, "the field table");
 }
 
-void run_command(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline,
-                 NSArray<id<MTLBuffer>>* buffers, const TraceParams& params,
-                 int params_index, int nblocks) {
+// Run one dispatch to completion; returns its GPU-busy time in seconds.
+double run_command(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline,
+                   NSArray<id<MTLBuffer>>* buffers, const TraceParams& params,
+                   int params_index, int nblocks) {
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
     [enc setComputePipelineState:pipeline];
@@ -256,19 +279,22 @@ void run_command(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline
             std::string("Metal command buffer failed: ") +
             [[[cb.error localizedDescription] description] UTF8String]);
     }
+    const double gpu_s = cb.GPUEndTime - cb.GPUStartTime;
     ProfileStats& prof = profile_stats();
     if (prof.enabled) {
-        prof.gpu_s += cb.GPUEndTime - cb.GPUStartTime;
+        prof.gpu_s += gpu_s;
     }
+    return gpu_s;
 }
 
 // Capture one trace dispatch into an Xcode .gputrace document (for the Metal
 // debugger's occupancy and limiter counters), enabled by pointing
 // FIRM3D_METAL_CAPTURE at the output path. Programmatic capture outside
 // Xcode additionally requires MTL_CAPTURE_ENABLED=1 in the environment.
-void capture_dispatch(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline,
-                      NSArray<id<MTLBuffer>>* buffers, const TraceParams& params,
-                      int params_index, int nblocks, const char* path) {
+// Returns the dispatch's GPU-busy time, as run_command does.
+double capture_dispatch(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pipeline,
+                        NSArray<id<MTLBuffer>>* buffers, const TraceParams& params,
+                        int params_index, int nblocks, const char* path) {
     MTLCaptureManager* mgr = [MTLCaptureManager sharedCaptureManager];
     MTLCaptureDescriptor* desc = [[MTLCaptureDescriptor alloc] init];
     desc.captureObject = queue;
@@ -281,17 +307,18 @@ void capture_dispatch(id<MTLCommandQueue> queue, id<MTLComputePipelineState> pip
                 "%s\n",
                 error != nil ? [[error localizedDescription] UTF8String]
                              : "no error details");
-        run_command(queue, pipeline, buffers, params, params_index, nblocks);
-        return;
+        return run_command(queue, pipeline, buffers, params, params_index, nblocks);
     }
+    double gpu_s;
     try {
-        run_command(queue, pipeline, buffers, params, params_index, nblocks);
+        gpu_s = run_command(queue, pipeline, buffers, params, params_index, nblocks);
     } catch (...) {
         [mgr stopCapture];
         throw;
     }
     [mgr stopCapture];
     fprintf(stderr, "[metal-profile] wrote GPU capture to %s\n", path);
+    return gpu_s;
 }
 
 // Fill grid_ranges (start, end, n_pts, 1/grid_size per coordinate) and the
@@ -350,7 +377,8 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
         params.inv_psi0_charge = (float)(1.0 / (psi0 * q));
         params.nparticles = nparticles;
         params.rhs_id = vacuum ? RHS_BOOZER_VACUUM : RHS_BOOZER;
-        params.max_steps = max_steps_per_dispatch();
+        const int fixed_steps = fixed_steps_per_dispatch();
+        params.max_steps = fixed_steps > 0 ? fixed_steps : FIRST_DISPATCH_STEPS;
         params.rescale_abstol = 1;
 
         // interleave (x1, x2, zeta) with vpar into the state buffer
@@ -406,6 +434,9 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
         const double prof_gpu0 = prof.gpu_s;
         const auto wall0 = std::chrono::steady_clock::now();
         long dispatches = 0;
+        long steps = 0;  // per particle, at most
+        int most_steps = 0;
+        double longest_s = 0.0;
         while (true) {
             long active = 0;
             for (int i = 0; i < nparticles; ++i) {
@@ -414,21 +445,30 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
             if (active == 0) {
                 break;
             }
-            if (++dispatches > MAX_TRACE_DISPATCHES) {
+            if (steps >= MAX_TRACE_STEPS) {
                 throw std::runtime_error(
                     "Metal tracing did not finish after " +
-                    std::to_string(MAX_TRACE_DISPATCHES) +
-                    " dispatches; the step size has likely collapsed");
+                    std::to_string(MAX_TRACE_STEPS) +
+                    " steps; the step size has likely collapsed");
             }
+            ++dispatches;
+            steps += params.max_steps;
+            most_steps = std::max(most_steps, params.max_steps);
             // capture the second dispatch: past start-up transients, still
             // early enough that nearly all particles are active
             static const char* capture_path = std::getenv("FIRM3D_METAL_CAPTURE");
+            double gpu_s;
             if (capture_path != nullptr && dispatches == 2) {
-                capture_dispatch(ctx.queue, ctx.trace, trace_buffers, params, 9,
-                                 nblocks, capture_path);
+                gpu_s = capture_dispatch(ctx.queue, ctx.trace, trace_buffers, params,
+                                         9, nblocks, capture_path);
                 capture_path = nullptr;
             } else {
-                run_command(ctx.queue, ctx.trace, trace_buffers, params, 9, nblocks);
+                gpu_s = run_command(ctx.queue, ctx.trace, trace_buffers, params, 9,
+                                    nblocks);
+            }
+            longest_s = std::max(longest_s, gpu_s);
+            if (fixed_steps == 0) {
+                params.max_steps = next_dispatch_steps(params.max_steps, gpu_s);
             }
         }
         if (prof.enabled) {
@@ -437,9 +477,10 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
                               .count();
             double gpu = prof.gpu_s - prof_gpu0;
             fprintf(stderr,
-                    "[metal-profile] trace: %d particles, %ld dispatches x %d "
-                    "steps, GPU busy %.3f s, loop wall %.3f s (GPU %.1f%%)\n",
-                    nparticles, dispatches, params.max_steps, gpu, wall,
+                    "[metal-profile] trace: %d particles, %ld dispatches of up to %d "
+                    "steps, longest %.1f ms, GPU busy %.3f s, loop wall %.3f s "
+                    "(GPU %.1f%%)\n",
+                    nparticles, dispatches, most_steps, 1e3 * longest_s, gpu, wall,
                     wall > 0.0 ? 100.0 * gpu / wall : 0.0);
         }
 

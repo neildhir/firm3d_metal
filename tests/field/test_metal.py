@@ -453,34 +453,59 @@ def run_fresh_interpreter(script: str, env: dict[str, str]) -> tuple[np.ndarray,
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")
 class TestMetalDispatchChunking(unittest.TestCase):
     """
-    The host splits a trace into dispatches of at most FIRM3D_METAL_MAX_STEPS
-    steps each, keeping every particle's state, step size and
-    first-same-as-last derivative in device buffers in between. However the
-    trace is split, it must come out bitwise the same as in one dispatch.
+    The host splits a trace into dispatches, each sized from the GPU time of
+    the last so that none holds the GPU long enough for macOS to kill it, or
+    of FIRM3D_METAL_MAX_STEPS steps each when that is set, keeping every
+    particle's state, step size and first-same-as-last derivative in device
+    buffers in between. However the trace is split, it must come out bitwise
+    the same as in one dispatch.
     """
 
     SCRIPT = FRESH_TRACE_SETUP + "np.save(sys.argv[1], trace())\n"
+    # 20,000 markers at the setup's tolerance: a single 1000-step dispatch,
+    # the host's fixed size before dispatches were timed, takes 0.19 s on an
+    # M4's GPU (and 0.8 s at a benchmark's tolerance and table size)
+    LONG_SCRIPT = FRESH_TRACE_SETUP + (
+        "stz = sample_test_points(80000)\n"
+        "stz = np.ascontiguousarray(stz[stz[:, 0] < 1.0][:20000])\n"
+        "vpar = np.random.default_rng(3).uniform(-v, v, len(stz))\n"
+        "trace_particles_boozer_gpu(cfield, stz, vpar, tmax=1e-5, mass=m, "
+        "charge=q, Ekin=E, tol=1e-8, forget_exact_path=True)\n"
+        "np.save(sys.argv[1], len(stz))\n"
+    )
+    # twice the wrapper's TARGET_DISPATCH_S
+    LONGEST_DISPATCH_S = 0.1
 
-    def trace(self, max_steps: str | None) -> tuple[np.ndarray, int]:
-        """Final states, and the number of dispatches the trace took."""
+    def trace(
+        self, max_steps: str | None, script: str = SCRIPT
+    ) -> tuple[np.ndarray, int, float]:
+        """What the script saved; the trace's dispatches and longest one [s]."""
         env = dict(os.environ, FIRM3D_METAL_PROFILE="1")
         env.pop("FIRM3D_METAL_MAX_STEPS", None)
         if max_steps is not None:
             env["FIRM3D_METAL_MAX_STEPS"] = max_steps
-        final, stderr = run_fresh_interpreter(self.SCRIPT, env)
-        dispatches = re.findall(r"trace: \d+ particles, (\d+) dispatches", stderr)
-        self.assertEqual(len(dispatches), 1, stderr)
-        return final, int(dispatches[0])
+        saved, stderr = run_fresh_interpreter(script, env)
+        traces = re.findall(
+            r"trace: \d+ particles, (\d+) dispatches .*, longest ([\d.]+) ms", stderr
+        )
+        self.assertEqual(len(traces), 1, stderr)
+        return saved, int(traces[0][0]), float(traces[0][1]) / 1e3
 
     def test_split_trace_is_bitwise_identical(self):
-        whole, n_whole = self.trace(None)
-        self.assertEqual(n_whole, 1, "the default must fit this trace in one dispatch")
-        for max_steps in ("1", "7"):
-            split, n_split = self.trace(max_steps)
+        whole, n_whole, _ = self.trace("100000")
+        self.assertEqual(n_whole, 1, "the reference must trace in one dispatch")
+        for max_steps in (None, "1", "7"):  # None: timed dispatches
+            split, n_split, _ = self.trace(max_steps)
             self.assertGreater(n_split, 1, f"FIRM3D_METAL_MAX_STEPS={max_steps}")
             np.testing.assert_array_equal(
                 split, whole, err_msg=f"FIRM3D_METAL_MAX_STEPS={max_steps}"
             )
+
+    def test_dispatches_stay_short(self):
+        n, dispatches, longest = self.trace(None, self.LONG_SCRIPT)
+        self.assertEqual(n, 20000)
+        self.assertGreater(dispatches, 1)
+        self.assertLess(longest, self.LONGEST_DISPATCH_S)
 
 
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")
