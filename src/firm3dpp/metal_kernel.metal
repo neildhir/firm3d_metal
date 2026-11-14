@@ -397,7 +397,10 @@ inline void max_stepsize_boozer(threadgroup float* dtmax,
                                 uint tid) {
     float modB = interpolants[PARTICLES_PER_BLOCK*0 + tid];
     float G = interpolants[PARTICLES_PER_BLOCK*4 + tid];
-    dtmax[tid] = (G / modB)*0.5f*M_PI_F / P.v_total;
+    // |G|: its sign is an equilibrium convention, but this bound is a time.
+    // A negative dtmax seeds a negative dt in setup, and the step loop then
+    // runs backwards and never reaches tmax.
+    dtmax[tid] = (fabs(G) / modB)*0.5f*M_PI_F / P.v_total;
 }
 
 inline void check_has_left_boozer(threadgroup bool* has_left,
@@ -542,7 +545,8 @@ kernel void setup_boozer(device const float* state_g [[buffer(0)]],
 
     if (is_valid) {
         float v_par = state[3*PARTICLES_PER_BLOCK + tid];
-        float v_perp2 = P.v_total*P.v_total - v_par*v_par;
+        // rounding can put |v_par| an ulp or so above v_total; clamp so mu >= 0
+        float v_perp2 = fmax(P.v_total*P.v_total - v_par*v_par, 0.0f);
         float modB = block_interpolants[0*PARTICLES_PER_BLOCK + tid];
 
         if (block_mu[tid] == -1.0f) { // sentinel: mu needs to be computed

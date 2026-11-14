@@ -15,6 +15,7 @@ from firm3d.catapult.tracing import (
     trace_particles_boozer_gpu,
 )
 from firm3d.field.boozermagneticfield import (
+    BoozerAnalytic,
     BoozerRadialInterpolant,
     BoozerSplineField,
     InterpolatedBoozerField,
@@ -600,6 +601,73 @@ class TestMetalTracingEdgeCases(unittest.TestCase):
         for ty in res_tys:
             self.assertLess(ty[-1, 0], self.tmax)  # flagged lost, not traced out
             self.assertGreaterEqual(ty[-1, 1], 1.0)
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalParticleSetup(unittest.TestCase):
+    """
+    What the setup kernel derives where the host passes the -1 sentinels: the
+    initial step from the step bound |G|/|B| pi/(2v), and mu from v_total and
+    the parallel speed. A tmax = 0 launch returns them with no step taken.
+    These follow fixes upstream made to the CUDA kernel this one ports.
+    """
+
+    def setUp(self):
+        self.velocity = np.float32(np.sqrt(2 * ENERGY / MASS))
+        # pseudo-Cartesian (s cos theta, s sin theta, zeta) at s = 0.5
+        theta = np.linspace(0.0, 2 * np.pi, 8, endpoint=False)
+        self.x_inits = np.ascontiguousarray(
+            np.column_stack((0.5 * np.cos(theta), 0.5 * np.sin(theta), theta)),
+            dtype=np.float32,
+        )
+
+    def table(self, G0: float) -> CatapultBoozerField:
+        # uniform |B| (etabar = 0): otherwise d|B|/ds ~ 1/sqrt(s) is singular
+        # on the table's s = 0 layer
+        field = BoozerAnalytic(etabar=0.0, B0=1.0, N=0, G0=G0, psi0=1.0, iota0=0.4)
+        return CatapultBoozerField(field, 8, 8, 8, precision="single")
+
+    def setup_only(self, cfield: CatapultBoozerField, vpar: np.ndarray) -> np.ndarray:
+        """(nparticles, 7) rows (t, x1, x2, zeta, vpar, dt, mu) at tmax = 0."""
+        n = len(vpar)
+        out = firm3dpp.boozer_gpu_tracing(
+            quad_pts=cfield.quad_pts,
+            srange=cfield.srange,
+            trange=cfield.trange,
+            zrange=cfield.zrange,
+            stz_init=self.x_inits[:n].copy(),
+            m=MASS,
+            q=CHARGE,
+            vtotal=float(self.velocity),
+            vtang=np.ascontiguousarray(vpar, dtype=np.float32),
+            tmax=np.zeros(n),
+            tol=1e-8,
+            dt_in=-np.ones(n, dtype=np.float32),
+            mu_in=-np.ones(n, dtype=np.float32),
+            psi0=cfield.psi0,
+            nparticles=n,
+            vacuum=cfield.vacuum,
+        )
+        return np.reshape(out, (n, 7))
+
+    def test_negative_G_steps_forward(self):
+        # the sign of G is a convention of the equilibrium, but the bound it
+        # sets is a time: a negative one seeds a negative dt, and the trace
+        # then runs backwards and never reaches tmax
+        vpar = np.linspace(-0.9, 0.9, len(self.x_inits)) * self.velocity
+        forward = self.setup_only(self.table(G0=1.1), vpar)
+        mirrored = self.setup_only(self.table(G0=-1.1), vpar)
+        self.assertTrue(np.all(mirrored[:, 5] > 0), mirrored[:, 5])
+        np.testing.assert_array_equal(mirrored[:, 5], forward[:, 5])
+
+    def test_parallel_speed_rounded_above_total_gives_zero_mu(self):
+        # rounding can put |v_par| a few ulps above v_total, which the Python
+        # check admits; mu from v_total^2 - v_par^2 must clamp at 0, since a
+        # negative mu has no physical meaning
+        above = np.nextafter(self.velocity, np.float32(np.inf))
+        above = np.nextafter(above, np.float32(np.inf))
+        out = self.setup_only(self.table(G0=1.1), np.array([above, -above]))
+        np.testing.assert_array_equal(out[:, 6], 0.0)
 
 
 @unittest.skipUnless(HAS_METAL, "Metal backend not available")
