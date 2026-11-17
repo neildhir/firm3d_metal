@@ -592,6 +592,7 @@ kernel void trace_boozer(device float* state_g [[buffer(0)]],
     threadgroup float block_interpolants[MAX_INTERPOLANTS*PARTICLES_PER_BLOCK];
     threadgroup bool is_valid_arr[PARTICLES_PER_BLOCK];
     threadgroup bool has_left[PARTICLES_PER_BLOCK];
+    threadgroup bool is_active[PARTICLES_PER_BLOCK];
     threadgroup bool needs_stage0[PARTICLES_PER_BLOCK];
     threadgroup float block_t[PARTICLES_PER_BLOCK];
     threadgroup float block_dt[PARTICLES_PER_BLOCK];
@@ -626,11 +627,16 @@ kernel void trace_boozer(device float* state_g [[buffer(0)]],
                       has_left[tid % PARTICLES_PER_BLOCK])) > 0) {
         ++step;
 
-        // particles at t = 0 have no stage-0 derivative yet; afterwards the
+        // particles that reached tmax or left the plasma sit out the stages,
+        // so they stop loading the table while the rest of their block steps
+        // on (CUDA instead hands their slot a new particle). Particles at
+        // t = 0 have no stage-0 derivative yet; afterwards the
         // first-same-as-last slot written by adjust_time persists, including
         // across dispatches, because derivs_g is indexed by the fixed slot
         if (tid < (uint)PARTICLES_PER_BLOCK) {
-            needs_stage0[tid] = is_valid_arr[tid] && (block_t[tid] == 0.0f);
+            is_active[tid] = is_valid_arr[tid] &&
+                             !(block_t[tid] >= block_tmax[tid] || has_left[tid]);
+            needs_stage0[tid] = is_active[tid] && (block_t[tid] == 0.0f);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -642,7 +648,7 @@ kernel void trace_boozer(device float* state_g [[buffer(0)]],
         for (int stage = 1; stage < 7; ++stage) {
             dp5_one_step(stage, x_temp, block_derivs, quadpts_arr, cell_index_start,
                          shape_fun_vals, block_t, block_dt, symmetry_exploited, state,
-                         block_mu, is_valid_arr, interp_pt, block_interpolants, P, tid);
+                         block_mu, is_active, interp_pt, block_interpolants, P, tid);
         }
         adjust_time(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
                     has_left, block_dtmax, is_valid_arr, P, tid);

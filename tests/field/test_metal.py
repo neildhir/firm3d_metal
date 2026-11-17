@@ -583,6 +583,19 @@ class TestMetalTracingEdgeCases(unittest.TestCase):
         for i in range(5):
             np.testing.assert_array_equal(part[i][-1], full[i][-1])
 
+    def test_finished_neighbours_leave_a_trace_unchanged(self):
+        # a particle that reaches its tmax sits out the DP5 stages while the
+        # rest of its block steps on; those still stepping must come out
+        # bitwise as they do when no block neighbour finishes early
+        tmax = np.full(len(self.stz), self.tmax)
+        tmax[1::2] = self.tmax / 10
+        mixed = self.trace(self.stz, self.vpar, tmax)
+        uniform = self.trace(self.stz, self.vpar, self.tmax)
+        for i in range(1, len(self.stz), 2):
+            self.assertLess(mixed[i][-1, 0], self.tmax)  # did finish early
+        for i in range(0, len(self.stz), 2):
+            np.testing.assert_array_equal(mixed[i][-1], uniform[i][-1])
+
     def test_single_particle(self):
         res_tys = self.trace(self.stz[:1], self.vpar[:1], self.tmax)
         self.assertEqual(len(res_tys), 1)
