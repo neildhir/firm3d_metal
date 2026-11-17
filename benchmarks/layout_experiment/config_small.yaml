@@ -1,0 +1,16 @@
+# Layout experiment: cooperative trace kernel (8 particles per 32-lane SIMD-group, firm3d_metal)
+# vs one thread per particle, with identical numerics, on firm3d_metal's alpha-loss workload.
+benchmark_config: ../alpha-loss-wistell-a.yaml # field, resolution, seed
+kernel_source: ../../src/firm3dpp/metal_kernel.metal # read only
+nparticles_max: 20000 # markers sampled once; each run traces the first n, dimensionless
+nparticles: [250, 500, 1000] # small ensembles; 1000 overlaps the first sweep, dimensionless
+tmax_s: 1.0e-3 # tracing time per marker [s]
+tol: 1.0e-6 # solver tolerance (abstol = reltol), dimensionless
+steps_per_dispatch: 128 # DP5 steps per dispatch, the same for every variant, dimensionless
+variants: [orig, coop, coop_active, 1t] # see variants.metal
+threads_per_tg_1t: [32, 256] # threadgroup sizes tried for the one-thread kernel, dimensionless
+repeats: 2 # rounds; every variant runs once per round, in turn, dimensionless
+smoke_nparticles: 1000 # markers in the bitwise-identity smoke test, dimensionless
+smoke_tmax_s: 1.0e-4 # tracing time of the smoke test [s]
+data_dir: data_small
+field: vacuum # vacuum (6 tabulated quantities, vacuum RHS) or finite_beta (12, general RHS)

@@ -1,0 +1,11 @@
+# Head-to-head of two Metal tracing kernels on identical inputs (scratch experiment).
+# The field, interpolation resolution and particle seed come from the benchmark config below,
+# so the ensemble is the same one that benchmark's 5000-particle, 1 ms scaling leg traced.
+benchmark_config: ../../alpha-loss-wistell-a.yaml
+nparticles: 5000 # ensemble size, dimensionless
+tmax_s: 1.0e-3 # tracing time per marker [s]
+tols: [1.0e-5, 1.0e-6] # solver tolerance (abstol = reltol), dimensionless
+repeats: 3 # timed calls per kernel and tolerance, dimensionless
+warmup_nparticles: 8 # markers in the untimed pipeline-compile call, dimensionless
+warmup_tmax_s: 1.0e-7 # tracing time of the warm-up call [s]
+data_dir: data
