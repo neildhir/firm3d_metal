@@ -2,6 +2,13 @@
 
 [← All benchmarks](README.md)
 
+**Superseded** by [alpha-loss-wistell-a-v2](alpha-loss-wistell-a-v2.md),
+the same workload with the traced particle pinned in its config. This
+benchmark took the alpha's mass from firm3d, which upstream changed on
+2026-10-31 (merged here on 2026-11-13); its filed runs, all from before
+that merge, used two proton plus two neutron masses. The set-up and
+method below still apply.
+
 **Question:** how much faster is the Metal GPU than all CPU cores of the
 same Mac at production ensemble sizes, and does float32 reproduce the
 float64 loss statistics? The original acceptance gate was a ≥3× speedup at

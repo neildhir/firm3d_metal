@@ -37,6 +37,7 @@ def trace(
     tmax: float,
     dt_save: float,
     tol: float,
+    species: bc.Particle,
 ) -> list[np.ndarray]:
     """One CPU trace across the MPI ranks, saving every dt_save."""
     res_tys, _ = trace_particles_boozer(
@@ -44,9 +45,9 @@ def trace(
         points,
         vpar,
         tmax=tmax,
-        mass=bc.MASS,
-        charge=bc.CHARGE,
-        Ekin=bc.EKIN,
+        mass=species.mass,
+        charge=species.charge,
+        Ekin=species.energy,
         comm=comm_world,
         abstol=tol,
         reltol=tol,
@@ -68,6 +69,7 @@ def main(config_path: Path, out_path: Path) -> None:
         JSON results file to write.
     """
     cfg = bc.load_config(config_path)
+    species = bc.particle(cfg)
     resolutions = [int(r) for r in cfg["resolutions"]]
     tols = [float(t) for t in cfg["tolerances"]]
     tmax = float(cfg["tracing"]["tmax_s"])
@@ -84,7 +86,9 @@ def main(config_path: Path, out_path: Path) -> None:
     t0 = time.time()
     spline = cc.build_spline_field(cfg, comm=comm_world)
     results["spline_build_s"] = time.time() - t0
-    points, vpar = cc.sample_particles(spline, n, int(cfg["seed"]), comm=comm_world)
+    points, vpar = cc.sample_particles(
+        spline, n, int(cfg["seed"]), species.velocity, comm=comm_world
+    )
 
     cells = []
     drift = np.zeros((len(resolutions), len(tols), n))
@@ -105,7 +109,7 @@ def main(config_path: Path, out_path: Path) -> None:
         for j, tol in enumerate(tols):
             comm_world.Barrier()  # rank 0's drift evaluation must not be timed
             t0 = time.time()
-            res_tys = trace(field, points, vpar, tmax, dt_save, tol)
+            res_tys = trace(field, points, vpar, tmax, dt_save, tol, species)
             wall = time.time() - t0
             if not verbose:
                 continue

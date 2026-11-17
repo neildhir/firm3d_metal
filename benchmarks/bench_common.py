@@ -5,6 +5,7 @@ that both tracers integrate the same markers in the same field.
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,17 +20,49 @@ from firm3d.field.tracing_helpers import (
     initialize_position_profile,
     initialize_velocity_uniform,
 )
-from firm3d.util.constants import (
-    ALPHA_PARTICLE_CHARGE,
-    ALPHA_PARTICLE_MASS,
-    FUSION_ALPHA_PARTICLE_ENERGY,
-)
 from firm3d.util.functions import sigmav
 
-MASS = ALPHA_PARTICLE_MASS
-CHARGE = ALPHA_PARTICLE_CHARGE
-EKIN = FUSION_ALPHA_PARTICLE_ENERGY
-VELOCITY = float(np.sqrt(2.0 * EKIN / MASS))
+
+@dataclass(frozen=True)
+class Particle:
+    """The traced species, as its benchmark config pins it."""
+
+    mass: float  # [kg]
+    charge: float  # [C]
+    energy: float  # kinetic energy [J]
+
+    @property
+    def velocity(self) -> float:
+        """Speed at the kinetic energy [m/s]."""
+        return float(np.sqrt(2.0 * self.energy / self.mass))
+
+
+def particle(cfg: dict[str, Any]) -> Particle:
+    """The traced species from a config's ``particle`` section.
+
+    Benchmarks pin it rather than take firm3d's constants, which change
+    upstream (the alpha mass did, on 2026-10-31) and would shift every
+    trajectory without changing any fingerprint.
+
+    Raises
+    ------
+    ValueError
+        If the config has no ``particle`` section, as configs written before
+        the pinning do; their benchmarks were superseded by a ``-v2`` name.
+    """
+    if "particle" not in cfg:
+        raise ValueError(
+            "the benchmark config has no particle section (mass_kg, charge_C, "
+            "energy_J); configs from before 2026-11-17 took them from firm3d, "
+            "whose alpha mass has since changed: run the -v2 benchmark instead"
+        )
+    p = cfg["particle"]
+    return Particle(
+        mass=float(p["mass_kg"]),
+        charge=float(p["charge_C"]),
+        energy=float(p["energy_J"]),
+    )
+
 
 # Survivor classification margin, relative to tmax. The GPU integrates time in
 # float32 and stops at the first step boundary at or after tmax, so a survivor
@@ -107,9 +140,15 @@ def build_field(
 
 
 def sample_particles(
-    field: InterpolatedBoozerField, nparticles: int, seed: int, comm: Any = None
+    field: InterpolatedBoozerField,
+    nparticles: int,
+    seed: int,
+    velocity: float,
+    comm: Any = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Sample fusion-birth positions and uniform parallel velocities.
+
+    Parallel speeds are uniform in [-velocity, velocity] [m/s].
 
     Returns
     -------
@@ -126,7 +165,7 @@ def sample_particles(
     points = initialize_position_profile(
         field, nparticles, reactivity, comm=comm, seed=seed
     )
-    vpar = initialize_velocity_uniform(VELOCITY, nparticles, comm=comm, seed=seed)
+    vpar = initialize_velocity_uniform(velocity, nparticles, comm=comm, seed=seed)
     # both broadcast from rank 0, so every rank holds the markers
     if points is None or vpar is None:
         raise RuntimeError(f"sampling {nparticles} markers returned nothing")

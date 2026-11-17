@@ -30,7 +30,12 @@ from firm3d.util.mpi import comm_world, verbose
 
 
 def trace(
-    field, points: np.ndarray, vpar: np.ndarray, tmax: float, tol: float
+    field,
+    points: np.ndarray,
+    vpar: np.ndarray,
+    tmax: float,
+    tol: float,
+    species: bc.Particle,
 ) -> list[np.ndarray]:
     """One CPU trace across the MPI ranks; returns per-particle rows."""
     res_tys, _ = trace_particles_boozer(
@@ -38,9 +43,9 @@ def trace(
         points,
         vpar,
         tmax=tmax,
-        mass=bc.MASS,
-        charge=bc.CHARGE,
-        Ekin=bc.EKIN,
+        mass=species.mass,
+        charge=species.charge,
+        Ekin=species.energy,
         comm=comm_world,
         abstol=tol,
         reltol=tol,
@@ -61,6 +66,7 @@ def main(config_path: Path, out_path: Path) -> None:
         JSON results file to write.
     """
     cfg = bc.load_config(config_path)
+    species = bc.particle(cfg)
     tol = float(cfg["tracing"]["tol"])
     tmax = float(cfg["tracing"]["tmax_s"])
     seed = int(cfg["seed"])
@@ -80,9 +86,11 @@ def main(config_path: Path, out_path: Path) -> None:
 
     scaling = []
     for n in cfg["scaling_nparticles"]:
-        points, vpar = bc.sample_particles(field, int(n), seed, comm=comm_world)
+        points, vpar = bc.sample_particles(
+            field, int(n), seed, species.velocity, comm=comm_world
+        )
         t0 = time.time()
-        res_tys = trace(field, points, vpar, tmax, tol)
+        res_tys = trace(field, points, vpar, tmax, tol, species)
         wall = time.time() - t0
         bc.snap_survivor_times_inplace(res_tys, tmax)
         n_lost = bc.n_lost(res_tys, tmax)
@@ -96,9 +104,11 @@ def main(config_path: Path, out_path: Path) -> None:
     val = cfg["validation"]
     n_val = int(val["nparticles"])
     tmax_val = float(val["tmax_s"])
-    points, vpar = bc.sample_particles(field, n_val, seed, comm=comm_world)
+    points, vpar = bc.sample_particles(
+        field, n_val, seed, species.velocity, comm=comm_world
+    )
     t0 = time.time()
-    res_tys = trace(field, points, vpar, tmax_val, tol)
+    res_tys = trace(field, points, vpar, tmax_val, tol, species)
     wall = time.time() - t0
     bc.snap_survivor_times_inplace(res_tys, tmax_val)
     times, loss_frac = compute_loss_fraction(

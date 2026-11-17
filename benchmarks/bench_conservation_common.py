@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from bench_common import CHARGE, MASS, VELOCITY
+from bench_common import particle
 from firm3d.field.boozermagneticfield import BoozerSplineField
 from firm3d.field.tracing_helpers import (
     initialize_position_uniform_vol,
@@ -58,11 +58,16 @@ def build_spline_field(cfg: dict[str, Any], comm: Any = None) -> BoozerSplineFie
 
 
 def sample_particles(
-    field: BoozerSplineField, nparticles: int, seed: int, comm: Any = None
+    field: BoozerSplineField,
+    nparticles: int,
+    seed: int,
+    velocity: float,
+    comm: Any = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Markers uniform in volume, parallel speeds uniform in pitch.
 
-    Sampled on the exact field, so both legs trace identical markers.
+    Sampled on the exact field, so both legs trace identical markers; parallel
+    speeds are uniform in [-velocity, velocity] [m/s].
 
     Returns
     -------
@@ -71,15 +76,17 @@ def sample_particles(
         both float64. Deterministic in (field, nparticles, seed).
     """
     points = initialize_position_uniform_vol(field, nparticles, comm=comm, seed=seed)
-    vpar = initialize_velocity_uniform(VELOCITY, nparticles, comm=comm, seed=seed)
+    vpar = initialize_velocity_uniform(velocity, nparticles, comm=comm, seed=seed)
     # both broadcast from rank 0, so every rank holds the markers
     if points is None or vpar is None:
         raise RuntimeError(f"sampling {nparticles} markers returned nothing")
     return points, vpar
 
 
-def peta_scale(field: BoozerSplineField) -> float:
+def peta_scale(field: BoozerSplineField, charge: float) -> float:
     """q |psi_edge|, the natural scale of p_eta, that drifts are measured in.
+
+    ``charge`` is the traced species' charge q [C].
 
     Raises
     ------
@@ -88,7 +95,7 @@ def peta_scale(field: BoozerSplineField) -> float:
     """
     if field.psi0 is None:
         raise ValueError("the field has no psi0 (edge toroidal flux / 2 pi)")
-    return CHARGE * abs(field.psi0)
+    return charge * abs(field.psi0)
 
 
 def initial_peta(
@@ -105,7 +112,8 @@ def initial_peta(
         (nparticles,) float64 p_eta [kg m^2 / s, i.e. J s].
     """
     m, n = cfg["helicity"]["m"], cfg["helicity"]["n"]
-    return compute_peta(field, points, vpar, MASS, CHARGE, m, n)
+    species = particle(cfg)
+    return compute_peta(field, points, vpar, species.mass, species.charge, m, n)
 
 
 def peta_drift(
@@ -124,7 +132,7 @@ def peta_drift(
     res_tys : list[np.ndarray]
         Per marker, the saved states, rows (t, s, theta, zeta, vpar).
     cfg : dict[str, Any]
-        Parsed benchmark config (for the helicity).
+        Parsed benchmark config (for the helicity and the particle).
 
     Returns
     -------
@@ -132,15 +140,16 @@ def peta_drift(
         (nparticles,) float64 drift max_t |p_eta(t) - p_eta(0)| / (q |psi_edge|).
     """
     m, n = cfg["helicity"]["m"], cfg["helicity"]["n"]
-    scale = peta_scale(field)
+    species = particle(cfg)
+    scale = peta_scale(field, species.charge)
     drift = np.empty(len(res_tys))
     for i, ty in enumerate(res_tys):
         peta = compute_peta(
             field,
             np.ascontiguousarray(ty[:, 1:4]),
             np.ascontiguousarray(ty[:, 4]),
-            MASS,
-            CHARGE,
+            species.mass,
+            species.charge,
             m,
             n,
         )

@@ -1,3 +1,10 @@
+# SUPERSEDED by conservation-qh-v2 (2026-11-17); kept for the runs filed under this name.
+# This config does not pin the traced particle, and firm3d's alpha mass changed
+# under it (2026-10-31, merged here 2026-11-13): runs filed up to 2026-11-13
+# used two proton plus two neutron masses. The leg scripts now require a
+# particle section, so this file no longer runs. Comments are not part of the
+# fingerprint, so these lines leave its filed runs comparable.
+#
 # Benchmark "conservation-qh": canonical-momentum conservation, CPU vs Metal.
 # In an exactly quasi-symmetric field the guiding-centre equations conserve
 # p_eta, so its drift along a trace is pure numerical error. Both tracers

@@ -7,12 +7,18 @@ from typing import cast
 
 import numpy as np
 
+import bench_common as bc
 import bench_conservation_common as cc
-from bench_common import CHARGE, MASS
 from firm3d.field.boozermagneticfield import BoozerAnalytic, BoozerSplineField
 from firm3d.trajectory_helpers import compute_peta
+from tests.benchmarks import BENCH_DIR
 
-HELICITY = {"helicity": {"m": 1, "n": 4}}
+# the helicity of analytic_field, and the species the benchmark traces
+CFG = {
+    "helicity": {"m": 1, "n": 4},
+    "particle": bc.load_config(BENCH_DIR / "conservation-qh-v2.yaml")["particle"],
+}
+SPECIES = bc.particle(CFG)
 
 
 def field_with_psi0(psi0: float | None) -> BoozerSplineField:
@@ -30,7 +36,7 @@ class TestPetaDrift(unittest.TestCase):
         row = [0.0, 0.5, 0.1, 0.2, 1e6]
         traces = [np.array([row, row, row])]
         np.testing.assert_array_equal(
-            cc.peta_drift(analytic_field(), traces, HELICITY), [0.0]
+            cc.peta_drift(analytic_field(), traces, CFG), [0.0]
         )
 
     def test_drift_is_largest_change_over_scale(self) -> None:
@@ -46,22 +52,22 @@ class TestPetaDrift(unittest.TestCase):
             field,
             np.ascontiguousarray(trace[:, 1:4]),
             trace[:, 4].copy(),
-            MASS,
-            CHARGE,
+            SPECIES.mass,
+            SPECIES.charge,
             1,
             4,
         )
-        expected = np.max(np.abs(peta - peta[0])) / (CHARGE * 0.8)
-        (drift,) = cc.peta_drift(field, [trace], HELICITY)
+        expected = np.max(np.abs(peta - peta[0])) / (SPECIES.charge * 0.8)
+        (drift,) = cc.peta_drift(field, [trace], CFG)
         self.assertGreater(drift, 0.0)
         self.assertAlmostEqual(drift, expected, delta=1e-12 * expected)
 
     def test_scale_is_charge_times_edge_flux(self) -> None:
-        self.assertEqual(cc.peta_scale(field_with_psi0(-2.0)), 2.0 * CHARGE)
+        self.assertEqual(cc.peta_scale(field_with_psi0(-2.0), 3.0), 6.0)
 
     def test_scale_needs_edge_flux(self) -> None:
         with self.assertRaisesRegex(ValueError, "psi0"):
-            cc.peta_scale(field_with_psi0(None))
+            cc.peta_scale(field_with_psi0(None), 3.0)
 
 
 class TestSummarise(unittest.TestCase):

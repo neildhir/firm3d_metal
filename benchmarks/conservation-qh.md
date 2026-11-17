@@ -2,6 +2,13 @@
 
 [← All benchmarks](README.md)
 
+**Superseded** by [conservation-qh-v2](conservation-qh-v2.md),
+the same workload with the traced particle pinned in its config. This
+benchmark took the alpha's mass from firm3d, which upstream changed on
+2026-10-31 (merged here on 2026-11-13); its filed runs, all from before
+that merge, used two proton plus two neutron masses. The set-up and
+method below still apply.
+
 **Question:** measured against a known answer rather than against the CPU,
 how accurate is float32 tracing on the Metal GPU, and at what cost
 compared with float64 on all CPU cores?

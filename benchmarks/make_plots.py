@@ -18,7 +18,8 @@ per benchmark for the README.
 
 Usage
 -----
-python make_plots.py [benchmark ...]    (default: every benchmark in results/)
+python make_plots.py [benchmark ...]    (default: every benchmark in results/
+                                         that no benchmark config supersedes)
 """
 
 import sys
@@ -58,12 +59,12 @@ from plot_common import (
 BENCH_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BENCH_DIR / "results"
 PLOTS_DIR = BENCH_DIR / "plots"
-ARCHIVE = "archive"  # results/archive/ holds pre-fingerprint runs; never plotted
+ARCHIVE = "archive"  # results/archive/ holds runs that are never plotted
 LABEL_GAP = 0.08  # minimum vertical spacing of speedup labels, fraction of the axis
 
 
 def main(names: list[str]) -> None:
-    """Plot each requested benchmark (default: all) and update the pages.
+    """Plot each requested benchmark (default: all current) and update the pages.
 
     Each benchmark's tables go into <benchmark>.md and the at-a-glance table
     into README.md, between their make_plots markers (fill_page); all are
@@ -72,9 +73,7 @@ def main(names: list[str]) -> None:
     if names:
         bench_dirs = [RESULTS_DIR / name for name in names]
     else:
-        bench_dirs = sorted(
-            d for d in RESULTS_DIR.iterdir() if d.is_dir() and d.name != ARCHIVE
-        )
+        bench_dirs = default_benchmarks(RESULTS_DIR, BENCH_DIR)
     headlines = []
     for bench_dir in bench_dirs:
         runs = load_runs(bench_dir)
@@ -99,6 +98,24 @@ def main(names: list[str]) -> None:
         glance = glance_table(headlines)
         print(f"at a glance:\n\n{glance}\n")
         fill_page(BENCH_DIR / "README.md", {"at-a-glance": glance})
+
+
+def default_benchmarks(results_dir: Path, bench_dir: Path) -> list[Path]:
+    """The benchmarks plotted when none are named: every results folder but
+    the archive and those a benchmark config in bench_dir ``supersedes``.
+
+    A superseded benchmark traced a workload that has since changed under it,
+    so its runs stay filed but would mix with its successor's in the
+    at-a-glance table; naming it on the command line still plots it.
+    """
+    superseded = {
+        bc.load_config(path).get("supersedes") for path in bench_dir.glob("*.yaml")
+    }
+    return sorted(
+        d
+        for d in results_dir.iterdir()
+        if d.is_dir() and d.name != ARCHIVE and d.name not in superseded
+    )
 
 
 def fill_page(path: Path, tables: dict[str, str]) -> None:

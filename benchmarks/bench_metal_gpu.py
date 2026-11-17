@@ -28,6 +28,7 @@ def trace(
     vpar: np.ndarray,
     tmax: float,
     tol: float,
+    species: bc.Particle,
 ) -> list[np.ndarray]:
     """One Metal trace; returns the per-particle trajectory rows."""
     res_tys, _ = trace_particles_boozer_gpu(
@@ -35,9 +36,9 @@ def trace(
         points,
         vpar,
         tmax=tmax,
-        mass=bc.MASS,
-        charge=bc.CHARGE,
-        Ekin=bc.EKIN,
+        mass=species.mass,
+        charge=species.charge,
+        Ekin=species.energy,
         tol=tol,
         forget_exact_path=True,
     )
@@ -55,6 +56,7 @@ def main(config_path: Path, out_path: Path) -> None:
         JSON results file to write.
     """
     cfg = bc.load_config(config_path)
+    species = bc.particle(cfg)
     res = int(cfg["interpolation"]["resolution"])
     tol = float(cfg["tracing"]["tol"])
     tmax = float(cfg["tracing"]["tmax_s"])
@@ -73,14 +75,14 @@ def main(config_path: Path, out_path: Path) -> None:
     print(f"CATAPULT table build: {results['table_build_s']:.1f} s", flush=True)
 
     # warm up: first use compiles the Metal pipelines
-    pts, vp = bc.sample_particles(field, 8, seed)
-    trace(cfield, pts, vp, 1e-7, tol)
+    pts, vp = bc.sample_particles(field, 8, seed, species.velocity)
+    trace(cfield, pts, vp, 1e-7, tol, species)
 
     scaling = []
     for n in cfg["scaling_nparticles"]:
-        points, vpar = bc.sample_particles(field, int(n), seed)
+        points, vpar = bc.sample_particles(field, int(n), seed, species.velocity)
         t0 = time.time()
-        res_tys = trace(cfield, points, vpar, tmax, tol)
+        res_tys = trace(cfield, points, vpar, tmax, tol, species)
         wall = time.time() - t0
         bc.snap_survivor_times_inplace(res_tys, tmax)
         n_lost = bc.n_lost(res_tys, tmax)
@@ -93,9 +95,9 @@ def main(config_path: Path, out_path: Path) -> None:
     val = cfg["validation"]
     n_val = int(val["nparticles"])
     tmax_val = float(val["tmax_s"])
-    points, vpar = bc.sample_particles(field, n_val, seed)
+    points, vpar = bc.sample_particles(field, n_val, seed, species.velocity)
     t0 = time.time()
-    res_tys = trace(cfield, points, vpar, tmax_val, tol)
+    res_tys = trace(cfield, points, vpar, tmax_val, tol, species)
     wall = time.time() - t0
     bc.snap_survivor_times_inplace(res_tys, tmax_val)
     times, loss_frac = compute_loss_fraction(

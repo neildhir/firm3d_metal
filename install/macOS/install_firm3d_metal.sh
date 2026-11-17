@@ -134,5 +134,5 @@ FIRM3D with the Metal backend is installed in $repo_root/.venv.
 To benchmark this Mac, see benchmarks/README.md, or directly:
 
     cd benchmarks
-    ../.venv/bin/python run_benchmark.py alpha-loss-wistell-a.yaml --tag <your-github-handle>
+    ../.venv/bin/python run_benchmark.py alpha-loss-wistell-a-v2.yaml --tag <your-github-handle>
 EOF

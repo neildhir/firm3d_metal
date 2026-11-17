@@ -58,6 +58,22 @@ class TestFillPage(unittest.TestCase):
         self.assertIn("missing.md", err.getvalue())
 
 
+class TestDefaultBenchmarks(unittest.TestCase):
+    def test_skips_the_archive_and_superseded_benchmarks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            results = root / "results"
+            for name in ("old", "old-v2", "other", mp.ARCHIVE):
+                (results / name).mkdir(parents=True)
+            (root / "old.yaml").write_text("seed: 1\n")
+            (root / "old-v2.yaml").write_text("supersedes: old\nseed: 1\n")
+            (root / "other.yaml").write_text("seed: 1\n")
+            self.assertEqual(
+                [d.name for d in mp.default_benchmarks(results, root)],
+                ["old-v2", "other"],
+            )
+
+
 class TestGlanceTable(unittest.TestCase):
     def test_rows_by_first_run_and_dashes_for_missing_benchmarks(self) -> None:
         early = datetime.fromisoformat("2026-11-01T10:00:00+00:00")

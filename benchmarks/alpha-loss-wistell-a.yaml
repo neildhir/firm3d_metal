@@ -1,3 +1,10 @@
+# SUPERSEDED by alpha-loss-wistell-a-v2 (2026-11-17); kept for the runs filed under this name.
+# This config does not pin the traced particle, and firm3d's alpha mass changed
+# under it (2026-10-31, merged here 2026-11-13): runs filed up to 2026-11-13
+# used two proton plus two neutron masses. The leg scripts now require a
+# particle section, so this file no longer runs. Comments are not part of the
+# fingerprint, so these lines leave its filed runs comparable.
+#
 # Benchmark "alpha-loss-wistell-a": CPU-vs-Metal tracing of fusion-birth alphas.
 # Both tracers integrate the same ensembles in the same field at the same
 # tolerance; the CPU runs one MPI rank per physical core, the GPU one process.

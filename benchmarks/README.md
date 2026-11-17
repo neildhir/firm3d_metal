@@ -29,8 +29,15 @@ backend's one-off field build to a single trace, the worst case.
 
 | Benchmark | What it measures |
 | --- | --- |
-| [Alpha losses in Wistell-A](alpha-loss-wistell-a.md) | speed and loss statistics |
-| [p_η conservation, QH field](conservation-qh.md) | accuracy against a ground truth |
+| [Alpha losses in Wistell-A](alpha-loss-wistell-a-v2.md) | speed and loss statistics |
+| [p_η conservation, QH field](conservation-qh-v2.md) | accuracy against a ground truth |
+
+Both pin the traced particle in their config. They supersede
+[alpha-loss-wistell-a](alpha-loss-wistell-a.md) and
+[conservation-qh](conservation-qh.md), which took the alpha's mass from
+firm3d: upstream changed it on 2026-10-31, which shifted every orbit
+without changing any run fingerprint. Their runs stay filed and their pages
+describe the set-up, but `make_plots.py` leaves them out unless named.
 
 The machine label in every table and legend reads: model (identifier) ·
 chip · CPU cores (performance + efficiency) · GPU cores · memory · macOS.
@@ -59,8 +66,8 @@ finish:
 
 ```sh
 cd benchmarks
-../.venv/bin/python run_benchmark.py alpha-loss-wistell-a.yaml --tag <you>
-../.venv/bin/python run_benchmark.py conservation-qh.yaml --tag <you>
+../.venv/bin/python run_benchmark.py alpha-loss-wistell-a-v2.yaml --tag <you>
+../.venv/bin/python run_benchmark.py conservation-qh-v2.yaml --tag <you>
 ```
 
 where `<you>` is your GitHub handle. Each run refuses to start on
@@ -163,7 +170,7 @@ No GitHub account? Zip the run folders and send them to the maintainer.
 | `plot_common.py`, `plots_conservation.py` | plotting by kind |
 | `physics_check.py` | marker-by-marker loss comparison |
 | `results/<benchmark>/` | one folder per run |
-| `results/archive/` | first M4 runs, pre-fingerprint; not plotted |
+| `results/archive/` | runs never plotted; each folder's README says why |
 
 A run folder holds `run.json` (machine, conditions, fingerprints, sanity
 check), `cpu.json` and `metal.json` (per-backend results), and per-marker
@@ -178,9 +185,9 @@ To run a leg by hand (for profiling, say), call its script directly from
 this directory, e.g.
 
 ```sh
-../.venv/bin/python bench_metal_gpu.py alpha-loss-wistell-a.yaml metal.json
+../.venv/bin/python bench_metal_gpu.py alpha-loss-wistell-a-v2.yaml metal.json
 mpiexec -n <physical cores> ../.venv/bin/python -m mpi4py \
-    bench_cpu_scaling.py alpha-loss-wistell-a.yaml cpu.json
+    bench_cpu_scaling.py alpha-loss-wistell-a-v2.yaml cpu.json
 ```
 
 Always launch an MPI script through `python -m mpi4py`: it converts an

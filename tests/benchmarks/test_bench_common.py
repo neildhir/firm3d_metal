@@ -6,8 +6,34 @@ from pathlib import Path
 import numpy as np
 
 import bench_common as bc
+from tests.benchmarks import BENCH_DIR
 
 TMAX = 1e-2
+
+
+class TestParticle(unittest.TestCase):
+    """Benchmarks trace the species their config pins, not firm3d's constants."""
+
+    def test_reads_the_pinned_species(self) -> None:
+        cfg = {"particle": {"mass_kg": 2.0, "charge_C": 3.0, "energy_J": 4.0}}
+        species = bc.particle(cfg)
+        self.assertEqual(species, bc.Particle(mass=2.0, charge=3.0, energy=4.0))
+        self.assertEqual(species.velocity, 2.0)  # sqrt(2 E / m)
+
+    def test_superseded_configs_no_longer_run(self) -> None:
+        # written before the pinning: their runs used firm3d's old alpha mass
+        for name in ("alpha-loss-wistell-a", "conservation-qh"):
+            cfg = bc.load_config(BENCH_DIR / f"{name}.yaml")
+            with self.assertRaisesRegex(ValueError, "-v2"):
+                bc.particle(cfg)
+
+    def test_every_current_config_pins_a_particle(self) -> None:
+        superseded = {
+            bc.load_config(p).get("supersedes") for p in BENCH_DIR.glob("*.yaml")
+        }
+        for path in BENCH_DIR.glob("*.yaml"):
+            if path.stem not in superseded:
+                self.assertGreater(bc.particle(bc.load_config(path)).mass, 0.0)
 
 
 class TestLossClassification(unittest.TestCase):
