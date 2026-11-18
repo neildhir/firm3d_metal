@@ -13,6 +13,11 @@ those on the first benchmark's page.
 ## Results
 
 <!-- make_plots:summary -->
+<!-- markdownlint-disable MD013 -->
+| Machine | CPU ranks | Best median drift, CPU | Best median drift, GPU | Tracing to the GPU's best, CPU / GPU | Speedup | With field builds |
+| --- | --- | --- | --- | --- | --- | --- |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | 10 | 1.7e-07 (64³, tol 1e-10) | 1.9e-06 (32³, tol 1e-8) | 3.42 s (32³, tol 1e-8) / 0.55 s (32³, tol 1e-8) | 6.3× | 1.0× |
+<!-- markdownlint-enable MD013 -->
 <!-- /make_plots:summary -->
 
 ![p_η drift against tolerance](plots/conservation-qh-v2/drift_vs_tolerance.png)
@@ -27,6 +32,11 @@ time.*
 ## Agreement across machines
 
 <!-- make_plots:agreement -->
+<!-- markdownlint-disable MD013 -->
+| Machine | GPU drifts vs reference GPU | CPU drifts vs reference CPU |
+| --- | --- | --- |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | reference | reference |
+<!-- markdownlint-enable MD013 -->
 <!-- /make_plots:agreement -->
 
 The comparison is the one described on the

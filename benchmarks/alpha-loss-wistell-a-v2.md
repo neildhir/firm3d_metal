@@ -13,6 +13,11 @@ first benchmark's page.
 ## Results
 
 <!-- make_plots:summary -->
+<!-- markdownlint-disable MD013 -->
+| Machine | CPU ranks | 10,000 × 1 ms: CPU / GPU | Speedup | 5,000 × 10 ms: CPU / GPU | Speedup | Lost, CPU / GPU |
+| --- | --- | --- | --- | --- | --- | --- |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | 10 | 31.5 s / 3.6 s | 8.7× | 159.6 s / 19.4 s | 8.2× | 43 / 42 |
+<!-- markdownlint-enable MD013 -->
 <!-- /make_plots:summary -->
 
 ![Wall time vs ensemble size](plots/alpha-loss-wistell-a-v2/scaling.png)
@@ -30,6 +35,11 @@ first benchmark's page.
 ## Physics agreement, marker by marker
 
 <!-- make_plots:physics -->
+<!-- markdownlint-disable MD013 -->
+| Machine | CPU vs GPU | Reference GPU vs GPU | Reference CPU vs CPU | Check |
+| --- | --- | --- | --- | --- |
+| MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | 7 fates differ (4 / 3), p 1; losses -2% (95% CI -13% to +10%); loss time ×1.002, p 0.027 | reference | reference | pass |
+<!-- markdownlint-enable MD013 -->
 <!-- /make_plots:physics -->
 
 The comparisons are those described on the
