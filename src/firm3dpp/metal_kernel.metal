@@ -1,7 +1,8 @@
 // Metal compute kernels for CATAPULT guiding-center tracing on Apple GPUs.
 //
-// This is a single-precision port of the Boozer-coordinate kernels in
-// cuda_kernel.cu. The numerics (tricubic Lagrange interpolation, adaptive
+// This is a single-precision port of the Boozer-coordinate and vacuum
+// Cartesian kernels in cuda_kernel.cu (the kernels named *_boozer serve both).
+// The numerics (tricubic Lagrange interpolation, adaptive
 // Dormand-Prince 5 stepping, stellarator-symmetry handling) follow the CUDA
 // implementation line for line; differences are structural:
 //
@@ -31,8 +32,13 @@ constant int PARTICLES_PER_BLOCK = 8;
 // rhs_id values; must match RhsId in metal_wrapper.mm
 constant int RHS_BOOZER_VACUUM = 0; // 6 interpolants
 constant int RHS_BOOZER = 1;        // 12 interpolants
+// 7 interpolants: B and grad|B| in cylindrical components, then the signed
+// distance to the boundary (positive inside)
+constant int RHS_CARTESIAN_VACUUM = 2;
 constant int MAX_INTERPOLANTS = 12;
-constant int N_DERIV_OUTPUTS = 4; // Boozer guiding-center state is (x1, x2, zeta, vpar)
+// the guiding-center state is (x1, x2, zeta, vpar) in Boozer coordinates,
+// (x, y, z, vpar) in Cartesian ones
+constant int N_DERIV_OUTPUTS = 4;
 
 // Must match the struct of the same name in metal_wrapper.mm (all 4-byte members).
 struct TraceParams {
@@ -72,7 +78,10 @@ constant float bhat_wgts[7] = {
 };
 
 inline int n_interpolants(int rhs_id) {
-    return rhs_id == RHS_BOOZER_VACUUM ? 6 : 12;
+    if (rhs_id == RHS_BOOZER_VACUUM) {
+        return 6;
+    }
+    return rhs_id == RHS_CARTESIAN_VACUUM ? 7 : 12;
 }
 
 // Number of threads in this SIMD-group (== threadgroup) for which pred holds;
@@ -226,6 +235,55 @@ inline void rhs_boozer_general(int deriv_id,
     derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] = vpardot;
 }
 
+// Guiding-center RHS in a vacuum field tabulated in cylindrical components,
+// for the state (x, y, z, vpar); a port of cuda_kernel.cu::rhs_GC_CartesianVacuum.
+inline void rhs_cartesian_vacuum(int deriv_id,
+                                 device float* derivs,
+                                 threadgroup const float* x_temp,
+                                 threadgroup const float* block_interpolants,
+                                 threadgroup const bool* symmetry_exploited,
+                                 threadgroup const float* mu,
+                                 constant TraceParams& P) {
+    float x = x_temp[1*PARTICLES_PER_BLOCK];
+    float y = x_temp[2*PARTICLES_PER_BLOCK];
+    float v_par = x_temp[4*PARTICLES_PER_BLOCK];
+
+    float B_r = block_interpolants[0*PARTICLES_PER_BLOCK];
+    float B_phi = block_interpolants[1*PARTICLES_PER_BLOCK];
+    float B_z = block_interpolants[2*PARTICLES_PER_BLOCK];
+    float GradAbsB_r = block_interpolants[3*PARTICLES_PER_BLOCK];
+    float GradAbsB_phi = block_interpolants[4*PARTICLES_PER_BLOCK];
+    float GradAbsB_z = block_interpolants[5*PARTICLES_PER_BLOCK];
+
+    // stellarator symmetry: B_r and the (phi, z) derivatives of |B| are odd
+    float sign = symmetry_exploited[0] ? -1.0f : 1.0f;
+    B_r *= sign;
+    GradAbsB_phi *= sign;
+    GradAbsB_z *= sign;
+
+    float inv_r = 1.0f / sqrt(x*x + y*y);
+    float cos_phi = x*inv_r;
+    float sin_phi = y*inv_r;
+    float B_x = cos_phi*B_r - sin_phi*B_phi;
+    float B_y = sin_phi*B_r + cos_phi*B_phi;
+    float GradAbsB_x = cos_phi*GradAbsB_r - sin_phi*GradAbsB_phi;
+    float GradAbsB_y = sin_phi*GradAbsB_r + cos_phi*GradAbsB_phi;
+
+    float AbsB = sqrt(B_x*B_x + B_y*B_y + B_z*B_z);
+    float half_v_perp2 = mu[0]*AbsB;
+    float fak1 = v_par/AbsB;
+    float fak2 = (P.mass/(P.charge*pow(AbsB, 3.0f)))*(half_v_perp2 + v_par*v_par);
+
+    derivs[(4*deriv_id + 0)*PARTICLES_PER_BLOCK] =
+        fak1*B_x + fak2*(B_y*GradAbsB_z - B_z*GradAbsB_y);
+    derivs[(4*deriv_id + 1)*PARTICLES_PER_BLOCK] =
+        fak1*B_y + fak2*(B_z*GradAbsB_x - B_x*GradAbsB_z);
+    derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] =
+        fak1*B_z + fak2*(B_x*GradAbsB_y - B_y*GradAbsB_x);
+    derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] =
+        -mu[0]*(B_x*GradAbsB_x + B_y*GradAbsB_y + B_z*GradAbsB_z)/AbsB;
+}
+
 // Interpolate the field at the precomputed cells and evaluate the RHS; a port
 // of cuda_kernel.cu::calc_derivs with block_interpolants hoisted to the kernel.
 inline void calc_derivs(int deriv_id,
@@ -250,6 +308,10 @@ inline void calc_derivs(int deriv_id,
             rhs_boozer_vacuum(deriv_id, derivs + tid, x_temp + tid,
                               block_interpolants + tid, symmetry_exploited + tid,
                               mu + tid, P);
+        } else if (P.rhs_id == RHS_CARTESIAN_VACUUM) {
+            rhs_cartesian_vacuum(deriv_id, derivs + tid, x_temp + tid,
+                                 block_interpolants + tid, symmetry_exploited + tid,
+                                 mu + tid, P);
         } else {
             rhs_boozer_general(deriv_id, derivs + tid, x_temp + tid,
                                block_interpolants + tid, symmetry_exploited + tid,
@@ -283,6 +345,39 @@ inline void map_to_grid_boozer(threadgroup float* interp_pt,
     if (symmetry_exploited[tid]) {
         z = period - z;
     }
+    interp_pt[2*PARTICLES_PER_BLOCK + tid] = z;
+}
+
+// Map a Cartesian position onto the cylindrical grid, exploiting field
+// periodicity and stellarator symmetry; port of map_to_grid_cartesian.
+inline void map_to_grid_cartesian(threadgroup float* interp_pt,
+                                  threadgroup float* x_temp,
+                                  threadgroup bool* symmetry_exploited,
+                                  constant TraceParams& P,
+                                  uint tid) {
+    float x = x_temp[1*PARTICLES_PER_BLOCK + tid];
+    float y = x_temp[2*PARTICLES_PER_BLOCK + tid];
+    float z = x_temp[3*PARTICLES_PER_BLOCK + tid];
+
+    float r = sqrt(x*x + y*y);
+    float phi = atan2(y, x);
+
+    // restrict phi to [0, 2pi / nfp]
+    float period = P.grid_ranges[5];
+    phi = fmod(phi, period);
+    phi += period*(phi < 0.0f);
+
+    // exploit stellarator symmetry: the grid covers z >= 0 only
+    symmetry_exploited[tid] = z < 0.0f;
+    if (symmetry_exploited[tid]) {
+        z = -z;
+        phi = 2.0f*M_PI_F - phi;
+        phi = fmod(phi, period);
+        phi += period*(phi < 0.0f);
+    }
+
+    interp_pt[tid] = r;
+    interp_pt[PARTICLES_PER_BLOCK + tid] = phi;
     interp_pt[2*PARTICLES_PER_BLOCK + tid] = z;
 }
 
@@ -321,7 +416,11 @@ inline void build_state(int deriv_id,
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     if (tid < (uint)PARTICLES_PER_BLOCK && is_valid[tid]) {
-        map_to_grid_boozer(interp_pt, x_temp, symmetry_exploited, P, tid);
+        if (P.rhs_id == RHS_CARTESIAN_VACUUM) {
+            map_to_grid_cartesian(interp_pt, x_temp, symmetry_exploited, P, tid);
+        } else {
+            map_to_grid_boozer(interp_pt, x_temp, symmetry_exploited, P, tid);
+        }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -403,6 +502,32 @@ inline void max_stepsize_boozer(threadgroup float* dtmax,
     dtmax[tid] = (fabs(G) / modB)*0.5f*M_PI_F / P.v_total;
 }
 
+// The same bound for a Cartesian position: a quarter turn at its major radius.
+inline void max_stepsize_cartesian(threadgroup float* dtmax,
+                                   threadgroup const float* x_temp,
+                                   constant TraceParams& P,
+                                   uint tid) {
+    float x = x_temp[1*PARTICLES_PER_BLOCK + tid];
+    float y = x_temp[2*PARTICLES_PER_BLOCK + tid];
+    float r = sqrt(x*x + y*y);
+    dtmax[tid] = r*0.5f*M_PI_F / P.v_total;
+}
+
+// |B| from the cylindrical components at a Cartesian position, as
+// cuda_kernel.cu::setup_particle computes it.
+inline float modB_cartesian(threadgroup const float* interpolants,
+                            threadgroup const float* x_temp,
+                            uint tid) {
+    float phi = atan2(x_temp[2*PARTICLES_PER_BLOCK + tid],
+                      x_temp[1*PARTICLES_PER_BLOCK + tid]);
+    float B_r = interpolants[0*PARTICLES_PER_BLOCK + tid];
+    float B_phi = interpolants[1*PARTICLES_PER_BLOCK + tid];
+    float B_z = interpolants[2*PARTICLES_PER_BLOCK + tid];
+    float B_x = cos(phi)*B_r - sin(phi)*B_phi;
+    float B_y = sin(phi)*B_r + cos(phi)*B_phi;
+    return sqrt(B_x*B_x + B_y*B_y + B_z*B_z);
+}
+
 inline void check_has_left_boozer(threadgroup bool* has_left,
                                   threadgroup const float* state,
                                   uint tid) {
@@ -410,6 +535,16 @@ inline void check_has_left_boozer(threadgroup bool* has_left,
     float x2 = state[1*PARTICLES_PER_BLOCK + tid];
     float s = sqrt(x1*x1 + x2*x2);
     has_left[tid] = s >= 1.0f;
+}
+
+// Lost once the signed distance to the boundary turns negative. Evaluated
+// after the last DP5 stage, whose point is the accepted new state, so the
+// stage's interpolants still hold the distance there (cuda_kernel.cu reads the
+// same value from that stage's derivative outputs).
+inline void check_has_left_cartesian(threadgroup bool* has_left,
+                                     threadgroup const float* interpolants,
+                                     uint tid) {
+    has_left[tid] = interpolants[6*PARTICLES_PER_BLOCK + tid] < 0.0f;
 }
 
 // Error estimation, step acceptance and step-size control; a port of
@@ -423,6 +558,7 @@ inline void adjust_time(threadgroup float* t,
                         threadgroup bool* has_left,
                         threadgroup const float* dtmax,
                         threadgroup const bool* is_valid,
+                        threadgroup const float* block_interpolants,
                         constant TraceParams& P,
                         uint tid) {
     const int p = tid % PARTICLES_PER_BLOCK;        // particle
@@ -453,7 +589,8 @@ inline void adjust_time(threadgroup float* t,
     const bool accept = active && (max_err <= 1.0f);
     if (accept) {
         float new_val = x_temp[(state_id + 1)*PARTICLES_PER_BLOCK + p];
-        if (state_id == 2) { // wrap zeta to [0, 2pi] to avoid large values
+        // wrap Boozer zeta to [0, 2pi] to avoid large values (Cartesian z stays)
+        if (state_id == 2 && P.rhs_id != RHS_CARTESIAN_VACUUM) {
             new_val = fmod(new_val, 2.0f*M_PI_F);
             new_val += 2.0f*M_PI_F*(new_val < 0.0f);
         }
@@ -487,12 +624,16 @@ inline void adjust_time(threadgroup float* t,
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (accept && state_id == 0) {
-        check_has_left_boozer(has_left, state, tid);
+        if (P.rhs_id == RHS_CARTESIAN_VACUUM) {
+            check_has_left_cartesian(has_left, block_interpolants, tid);
+        } else {
+            check_has_left_boozer(has_left, state, tid);
+        }
     }
 }
 
 // Compute mu, dtmax, and the initial dt where the host passed the -1 sentinel;
-// a port of setup_particle/setup_kernel for Boozer coordinates.
+// a port of setup_particle/setup_kernel for Boozer and Cartesian coordinates.
 kernel void setup_boozer(device const float* state_g [[buffer(0)]],
                          device const float* quadpts_arr [[buffer(1)]],
                          device float* mu_g [[buffer(2)]],
@@ -547,13 +688,19 @@ kernel void setup_boozer(device const float* state_g [[buffer(0)]],
         float v_par = state[3*PARTICLES_PER_BLOCK + tid];
         // rounding can put |v_par| an ulp or so above v_total; clamp so mu >= 0
         float v_perp2 = fmax(P.v_total*P.v_total - v_par*v_par, 0.0f);
-        float modB = block_interpolants[0*PARTICLES_PER_BLOCK + tid];
+        float modB = P.rhs_id == RHS_CARTESIAN_VACUUM
+                   ? modB_cartesian(block_interpolants, x_temp, tid)
+                   : block_interpolants[0*PARTICLES_PER_BLOCK + tid];
 
         if (block_mu[tid] == -1.0f) { // sentinel: mu needs to be computed
             block_mu[tid] = v_perp2 / (2.0f*modB);
         }
 
-        max_stepsize_boozer(block_dtmax, block_interpolants, P, tid);
+        if (P.rhs_id == RHS_CARTESIAN_VACUUM) {
+            max_stepsize_cartesian(block_dtmax, x_temp, P, tid);
+        } else {
+            max_stepsize_boozer(block_dtmax, block_interpolants, P, tid);
+        }
 
         if (block_dt[tid] == -1.0f) { // sentinel: dt needs to be computed
             block_dt[tid] = 1e-3f*block_dtmax[tid];
@@ -651,7 +798,7 @@ kernel void trace_boozer(device float* state_g [[buffer(0)]],
                          block_mu, is_active, interp_pt, block_interpolants, P, tid);
         }
         adjust_time(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
-                    has_left, block_dtmax, is_valid_arr, P, tid);
+                    has_left, block_dtmax, is_valid_arr, block_interpolants, P, tid);
         // orders adjust_time's reads of derivs, and its first-same-as-last
         // copy, before the next step's writes by other threads
         threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
@@ -722,7 +869,11 @@ kernel void test_interp_boozer(device const float* quadpts_arr [[buffer(0)]],
         for (int i = 0; i < n; ++i) {
             out_arr[i] = block_interpolants[i*PARTICLES_PER_BLOCK + tid];
         }
-        if (symmetry_exploited[tid]) {
+        if (symmetry_exploited[tid] && P.rhs_id == RHS_CARTESIAN_VACUUM) {
+            out_arr[0] *= -1.0f; // B_r
+            out_arr[4] *= -1.0f; // d|B|/dphi
+            out_arr[5] *= -1.0f; // d|B|/dz
+        } else if (symmetry_exploited[tid]) {
             out_arr[2] *= -1.0f; // d|B|/dtheta
             out_arr[3] *= -1.0f; // d|B|/dzeta
             if (P.rhs_id == RHS_BOOZER && n >= 12) {

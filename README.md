@@ -39,6 +39,11 @@ repository root, installs GSL and Open MPI through Homebrew (asking first),
 and verifies the build with the Metal test suite. Re-run it after every
 `git pull` to rebuild.
 
+The Metal backend traces in single precision, since Apple GPUs have no FP64:
+guiding centres in Boozer coordinates (vacuum, finite-beta and no-K fields)
+and in vacuum Cartesian fields. Shear Alfvén waves and collisions are traced
+on CUDA or the CPU only.
+
 ### Perlmutter (NERSC)
 
 All dependencies can be installed inside a conda environment using the provided install bash script located at `install/perlmutter/install_firm3d_perlmutter.sh`.

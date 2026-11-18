@@ -251,6 +251,14 @@ template<> py::array_t<float> test_gpu_interpolation<float>(py::array_t<float> q
 template<> py::array_t<double> test_gpu_interpolation<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, std::string coordinates, int n_points);
 template<> py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, double psi0, int n_points, bool vacuum);
 template<> py::array_t<double> test_derivatives_boozer<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, double psi0, int n_points, bool vacuum);
+template<> vector<float> cartesian_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<float> xyz_init, double m, double q, double vtotal, py::array_t<float> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, int nparticles);
+template<> vector<double> cartesian_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, py::array_t<double> mu_in, int nparticles);
+template<> py::array_t<float> test_derivatives_cartesian<float>(py::array_t<float> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, int n_points);
+template<> py::array_t<double> test_derivatives_cartesian<double>(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, int n_points);
 // SHA-256 of the Metal sources (kernel, then wrapper) this build compiled.
 const char* metal_sources_sha256();
 #endif

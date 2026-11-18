@@ -650,10 +650,10 @@ void init_tracing(py::module_ &m){
 #endif
 
 #ifdef USE_METAL
-    // Metal backend: the Boozer kernels in single precision. The double
-    // overloads exist to fail with an informative error, since Apple GPUs
-    // have no FP64; SAW, Cartesian and the double-only timestep test bindings
-    // are not provided.
+    // Metal backend: the Boozer and vacuum Cartesian kernels in single
+    // precision. The double overloads exist to fail with an informative
+    // error, since Apple GPUs have no FP64; SAW, collisions and the
+    // double-only timestep test bindings are not provided.
     m.def("boozer_gpu_tracing", &boozer_gpu_tracing<float>,
         py::arg("quad_pts").noconvert(),
         py::arg("srange"),
@@ -690,6 +690,40 @@ void init_tracing(py::module_ &m){
         py::arg("psi0"),
         py::arg("nparticles"),
         py::arg("vacuum") = false
+        );
+
+    m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("nparticles")
+        );
+
+    m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("nparticles")
         );
 
     m.def("test_gpu_interpolation", &test_gpu_interpolation<float>,
@@ -740,6 +774,32 @@ void init_tracing(py::module_ &m){
         py::arg("psi0"),
         py::arg("n_points"),
         py::arg("vacuum") = false
+        );
+
+    m.def("test_derivatives_cartesian", &test_derivatives_cartesian<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("n_points")
+        );
+
+    m.def("test_derivatives_cartesian", &test_derivatives_cartesian<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("n_points")
         );
 
     // CPU reference derivatives, used by the GPU tests; compiled regardless

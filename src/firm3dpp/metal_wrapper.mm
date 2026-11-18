@@ -43,6 +43,13 @@ constexpr int N_DERIV_OUTPUTS = 4;
 // rhs_id values; must match metal_kernel.metal
 constexpr int RHS_BOOZER_VACUUM = 0;
 constexpr int RHS_BOOZER = 1;
+constexpr int RHS_CARTESIAN_VACUUM = 2;
+
+// Interpolated quantities per grid point; must match n_interpolants in
+// metal_kernel.metal.
+constexpr int n_interpolants(int rhs_id) {
+    return rhs_id == RHS_BOOZER_VACUUM ? 6 : rhs_id == RHS_CARTESIAN_VACUUM ? 7 : 12;
+}
 
 // Must match the struct of the same name in metal_kernel.metal.
 struct TraceParams {
@@ -352,42 +359,30 @@ const char* metal_sources_sha256() {
     return FIRM3D_METAL_SOURCES_SHA256;
 }
 
-template <>
-vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
-                                        py::array_t<double> srange,
-                                        py::array_t<double> trange,
-                                        py::array_t<double> zrange,
-                                        py::array_t<float> stz_init, double m, double q,
-                                        double vtotal, py::array_t<float> vtang,
-                                        py::array_t<double> tmax, double tol,
-                                        py::array_t<float> dt_in,
-                                        py::array_t<float> mu_in, double psi0,
-                                        int nparticles, bool vacuum) {
+// One trace on the GPU of nparticles from their three position coordinates
+// ((x1, x2, zeta) in Boozer coordinates, (x, y, z) in Cartesian ones) and
+// parallel speeds, with params set for the field and RHS; shared by the
+// Boozer and Cartesian entry points. Returns the (nparticles, 7) rows
+// (t, three coordinates, vpar, dt, mu).
+static vector<float> trace_on_gpu(py::array_t<float>& quad_pts, TraceParams params,
+                                  py::array_t<float>& init_pos,
+                                  py::array_t<float>& vtang,
+                                  py::array_t<double>& tmax,
+                                  py::array_t<float>& dt_in,
+                                  py::array_t<float>& mu_in, int nparticles) {
     @autoreleasepool {
         MetalContext& ctx = context();
 
-        TraceParams params = {};
-        fill_grid(params, array_ptr(srange), array_ptr(trange), array_ptr(zrange));
-        params.mass = (float)m;
-        params.charge = (float)q;
-        params.atol = (float)tol;
-        params.rtol = (float)tol;
-        params.v_total = (float)vtotal;
-        params.psi0 = (float)psi0;
-        params.inv_psi0_charge = (float)(1.0 / (psi0 * q));
-        params.nparticles = nparticles;
-        params.rhs_id = vacuum ? RHS_BOOZER_VACUUM : RHS_BOOZER;
         const int fixed_steps = fixed_steps_per_dispatch();
         params.max_steps = fixed_steps > 0 ? fixed_steps : FIRST_DISPATCH_STEPS;
-        params.rescale_abstol = 1;
 
-        // interleave (x1, x2, zeta) with vpar into the state buffer
-        float* stz_arr = array_ptr(stz_init);
+        // interleave the three position coordinates with vpar into the state buffer
+        float* pos_arr = array_ptr(init_pos);
         float* vtang_arr = array_ptr(vtang);
         vector<float> state(4 * (size_t)nparticles);
         for (int i = 0; i < nparticles; ++i) {
             for (int j = 0; j < 3; ++j) {
-                state[4*i + j] = stz_arr[3*i + j];
+                state[4*i + j] = pos_arr[3*i + j];
             }
             state[4*i + 3] = vtang_arr[i];
         }
@@ -501,6 +496,70 @@ vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
 }
 
 template <>
+vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts,
+                                        py::array_t<double> srange,
+                                        py::array_t<double> trange,
+                                        py::array_t<double> zrange,
+                                        py::array_t<float> stz_init, double m, double q,
+                                        double vtotal, py::array_t<float> vtang,
+                                        py::array_t<double> tmax, double tol,
+                                        py::array_t<float> dt_in,
+                                        py::array_t<float> mu_in, double psi0,
+                                        int nparticles, bool vacuum) {
+    TraceParams params = {};
+    fill_grid(params, array_ptr(srange), array_ptr(trange), array_ptr(zrange));
+    params.mass = (float)m;
+    params.charge = (float)q;
+    params.atol = (float)tol;
+    params.rtol = (float)tol;
+    params.v_total = (float)vtotal;
+    params.psi0 = (float)psi0;
+    params.inv_psi0_charge = (float)(1.0 / (psi0 * q));
+    params.nparticles = nparticles;
+    params.rhs_id = vacuum ? RHS_BOOZER_VACUUM : RHS_BOOZER;
+    params.rescale_abstol = 1;
+    return trace_on_gpu(quad_pts, params, stz_init, vtang, tmax, dt_in, mu_in,
+                        nparticles);
+}
+
+template <>
+vector<float> cartesian_gpu_tracing<float>(py::array_t<float> quad_pts,
+                                           py::array_t<double> rrange,
+                                           py::array_t<double> phirange,
+                                           py::array_t<double> zrange,
+                                           py::array_t<float> xyz_init, double m,
+                                           double q, double vtotal,
+                                           py::array_t<float> vtang,
+                                           py::array_t<double> tmax, double tol,
+                                           py::array_t<float> dt_in,
+                                           py::array_t<float> mu_in,
+                                           int nparticles) {
+    TraceParams params = {};
+    fill_grid(params, array_ptr(rrange), array_ptr(phirange), array_ptr(zrange));
+    params.mass = (float)m;
+    params.charge = (float)q;
+    params.atol = (float)tol;
+    params.rtol = (float)tol;
+    params.v_total = (float)vtotal;
+    params.nparticles = nparticles;
+    params.rhs_id = RHS_CARTESIAN_VACUUM;
+    params.rescale_abstol = 1;
+    return trace_on_gpu(quad_pts, params, xyz_init, vtang, tmax, dt_in, mu_in,
+                        nparticles);
+}
+
+template <>
+vector<double> cartesian_gpu_tracing<double>(py::array_t<double>, py::array_t<double>,
+                                             py::array_t<double>, py::array_t<double>,
+                                             py::array_t<double>, double, double,
+                                             double, py::array_t<double>,
+                                             py::array_t<double>, double,
+                                             py::array_t<double>,
+                                             py::array_t<double>, int) {
+    throw_no_fp64("cartesian_gpu_tracing");
+}
+
+template <>
 vector<double> boozer_gpu_tracing<double>(py::array_t<double>, py::array_t<double>,
                                           py::array_t<double>, py::array_t<double>,
                                           py::array_t<double>, double, double, double,
@@ -524,16 +583,19 @@ py::array_t<float> test_gpu_interpolation<float>(py::array_t<float> quad_pts,
             rhs_id = RHS_BOOZER_VACUUM;
         } else if (coordinates == "boozer") {
             rhs_id = RHS_BOOZER;
+        } else if (coordinates == "cartesian_vacuum") {
+            rhs_id = RHS_CARTESIAN_VACUUM;
         } else {
             throw std::runtime_error("test_gpu_interpolation: coordinates '" +
                                      coordinates +
                                      "' are not implemented in the Metal backend");
         }
-        int n = rhs_id == RHS_BOOZER_VACUUM ? 6 : 12;
+        int n = n_interpolants(rhs_id);
 
         MetalContext& ctx = context();
 
-        // convert (s, theta) to pseudo-Cartesian in place, as the CUDA host does
+        // convert (s, theta), or (r, phi), to (x1, x2) in place, as the CUDA
+        // host does
         float* loc_arr = array_ptr(loc);
         for (int i = 0; i < n_points; ++i) {
             float x1 = loc_arr[3*i] * cosf(loc_arr[3*i + 1]);
@@ -573,29 +635,17 @@ py::array_t<double> test_gpu_interpolation<double>(py::array_t<double>,
     throw_no_fp64("test_gpu_interpolation");
 }
 
-template <>
-py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts,
-                                                  py::array_t<double> x1_range,
-                                                  py::array_t<double> x2_range,
-                                                  py::array_t<double> x3_range,
-                                                  py::array_t<float> loc,
-                                                  py::array_t<float> vpar,
-                                                  double v_total, double m, double q,
-                                                  double psi0, int n_points,
-                                                  bool vacuum) {
+// The RHS at nparticles phase-space points, from their positions as
+// (coordinate, angle, coordinate) and parallel speeds, with params set for the
+// field and RHS: setup computes mu, then one stage evaluates the RHS. Shared
+// by the Boozer and Cartesian test entry points.
+static py::array_t<float> derivatives_on_gpu(py::array_t<float>& quad_pts,
+                                             TraceParams params,
+                                             py::array_t<float>& loc,
+                                             py::array_t<float>& vpar,
+                                             int n_points) {
     @autoreleasepool {
         MetalContext& ctx = context();
-
-        TraceParams params = {};
-        fill_grid(params, array_ptr(x1_range), array_ptr(x2_range),
-                  array_ptr(x3_range));
-        params.mass = (float)m;
-        params.charge = (float)q;
-        params.v_total = (float)v_total;
-        params.psi0 = (float)psi0;
-        params.inv_psi0_charge = (float)(1.0 / (psi0 * q));
-        params.nparticles = n_points;
-        params.rhs_id = vacuum ? RHS_BOOZER_VACUUM : RHS_BOOZER;
 
         float* loc_arr = array_ptr(loc);
         float* vpar_arr = array_ptr(vpar);
@@ -638,6 +688,61 @@ py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts,
 
         return py::array_t<float>(4*n, (const float*)out_b.contents);
     }
+}
+
+
+template <>
+py::array_t<float> test_derivatives_boozer<float>(py::array_t<float> quad_pts,
+                                                  py::array_t<double> x1_range,
+                                                  py::array_t<double> x2_range,
+                                                  py::array_t<double> x3_range,
+                                                  py::array_t<float> loc,
+                                                  py::array_t<float> vpar,
+                                                  double v_total, double m, double q,
+                                                  double psi0, int n_points,
+                                                  bool vacuum) {
+    TraceParams params = {};
+    fill_grid(params, array_ptr(x1_range), array_ptr(x2_range),
+              array_ptr(x3_range));
+    params.mass = (float)m;
+    params.charge = (float)q;
+    params.v_total = (float)v_total;
+    params.psi0 = (float)psi0;
+    params.inv_psi0_charge = (float)(1.0 / (psi0 * q));
+    params.nparticles = n_points;
+    params.rhs_id = vacuum ? RHS_BOOZER_VACUUM : RHS_BOOZER;
+    return derivatives_on_gpu(quad_pts, params, loc, vpar, n_points);
+}
+
+template <>
+py::array_t<float> test_derivatives_cartesian<float>(py::array_t<float> quad_pts,
+                                                    py::array_t<double> x1_range,
+                                                    py::array_t<double> x2_range,
+                                                    py::array_t<double> x3_range,
+                                                    py::array_t<float> loc,
+                                                    py::array_t<float> vpar,
+                                                    double v_total, double m,
+                                                    double q, int n_points) {
+    TraceParams params = {};
+    fill_grid(params, array_ptr(x1_range), array_ptr(x2_range),
+              array_ptr(x3_range));
+    params.mass = (float)m;
+    params.charge = (float)q;
+    params.v_total = (float)v_total;
+    params.nparticles = n_points;
+    params.rhs_id = RHS_CARTESIAN_VACUUM;
+    return derivatives_on_gpu(quad_pts, params, loc, vpar, n_points);
+}
+
+template <>
+py::array_t<double> test_derivatives_cartesian<double>(py::array_t<double>,
+                                                      py::array_t<double>,
+                                                      py::array_t<double>,
+                                                      py::array_t<double>,
+                                                      py::array_t<double>,
+                                                      py::array_t<double>, double,
+                                                      double, double, int) {
+    throw_no_fp64("test_derivatives_cartesian");
 }
 
 template <>

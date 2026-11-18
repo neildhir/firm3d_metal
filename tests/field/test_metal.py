@@ -9,10 +9,11 @@ from pathlib import Path
 import numpy as np
 import firm3dpp
 
-from firm3d.catapult.field import CatapultBoozerField
+from firm3d.catapult.field import CatapultBoozerField, CatapultCartesianField
 from firm3d.catapult.tracing import (
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
+    trace_particles_cartesian_gpu,
 )
 from firm3d.field.boozermagneticfield import (
     BoozerAnalytic,
@@ -36,6 +37,7 @@ from firm3d.util.constants import (
 )
 from tests.field.test_gpu import (
     CATAPULTField,
+    cartesian_rhs,
     final_states,
     get_field,
     sample_test_points,
@@ -407,6 +409,234 @@ class TestMetalTracingBoozerSplineNoK(unittest.TestCase):
             self.FACTOR,
             f"median p_eta drift: Metal {d_gpu:.3e}, CPU {d_cpu:.3e}",
         )
+
+
+class AnalyticCylindricalField:
+    """
+    A smooth vector field B = (B_r, B_phi, B_z) on a cylindrical grid, with
+    the interface the Cartesian table builder and cartesian_rhs read from a
+    simsopt InterpolatedField. The 1/r toroidal part carries a perturbation
+    of amplitude eps that is periodic in phi with nfp and stellarator
+    symmetric (B_r odd, B_phi and B_z even under (phi, z) -> (-phi, -z)), so
+    the kernel's folding of phi and z, and the signs it restores, are tested
+    against the field itself. With eps = 0 the guiding-centre orbit is known
+    exactly: r and v_par stay fixed, phi turns at v_par / r, and z drifts at
+    m (v_par^2 + v_perp^2 / 2) / (q b0 r0).
+    """
+
+    H = 1e-6  # central-difference step for grad |B|, relative to r0, dimensionless
+
+    def __init__(self, b0, r0, eps, nfp, r_range, z_range, cells):
+        self.b0, self.r0, self.eps, self.nfp = b0, r0, eps, nfp
+        self.kz = np.pi / z_range[1]  # vertical wavenumber of the perturbation [1/m]
+        self.r_range = (r_range[0], r_range[1], cells)
+        self.phi_range = (0.0, 2 * np.pi / nfp, cells)
+        self.z_range = (z_range[0], z_range[1], cells)
+        self.rphiz = np.zeros((0, 3))
+
+    def set_points_cyl(self, rphiz):
+        self.rphiz = np.asarray(rphiz, dtype=float).reshape(-1, 3)
+
+    def _b_cyl(self, r, phi, z):
+        wave = self.eps * self.b0
+        return np.column_stack(
+            (
+                wave * np.sin(self.nfp * phi) * np.cos(self.kz * z),
+                self.b0 * self.r0 / r
+                + wave * np.cos(self.nfp * phi) * np.cos(self.kz * z),
+                wave * np.sin(self.nfp * phi) * np.sin(self.kz * z),
+            )
+        )
+
+    def _abs_b(self, r, phi, z):
+        return np.linalg.norm(self._b_cyl(r, phi, z), axis=1)
+
+    def B_cyl(self):
+        return self._b_cyl(*self.rphiz.T)
+
+    def GradAbsB_cyl(self):
+        r, phi, z = self.rphiz.T
+        h = self.H * self.r0
+        return np.column_stack(
+            (
+                (self._abs_b(r + h, phi, z) - self._abs_b(r - h, phi, z)) / (2 * h),
+                (self._abs_b(r, phi + h / r, z) - self._abs_b(r, phi - h / r, z))
+                / (2 * h),
+                (self._abs_b(r, phi, z + h) - self._abs_b(r, phi, z - h)) / (2 * h),
+            )
+        )
+
+    def _to_cartesian(self, v):
+        phi = self.rphiz[:, 1]
+        c, s = np.cos(phi), np.sin(phi)
+        return np.column_stack(
+            (c * v[:, 0] - s * v[:, 1], s * v[:, 0] + c * v[:, 1], v[:, 2])
+        )
+
+    def B(self):
+        return self._to_cartesian(self.B_cyl())
+
+    def GradAbsB(self):
+        return self._to_cartesian(self.GradAbsB_cyl())
+
+
+class TorusClassifier:
+    """
+    Stands in for a simsopt SurfaceClassifier: positive inside the torus of
+    major radius r0 and minor radius a, negative outside. The quadratic
+    a^2 - (r - r0)^2 - z^2 is smooth, so the tricubic table holds it exactly.
+    """
+
+    def __init__(self, r0, a):
+        self.r0, self.a = r0, a
+
+    def evaluate_rphiz(self, rphiz):
+        r, z = rphiz[:, 0], rphiz[:, 2]
+        return (self.a**2 - (r - self.r0) ** 2 - z**2)[:, None]
+
+
+@unittest.skipUnless(HAS_METAL, "Metal backend not available")
+class TestMetalTracingCartesianVacuum(unittest.TestCase):
+    """
+    The Cartesian kernels against analytic fields, since the CPU Cartesian
+    tracer and coil fields come from simsopt: interpolation and the RHS in a
+    perturbed, stellarator-symmetric field, and whole traces in a purely
+    toroidal one, whose orbits and loss times are known in closed form.
+    """
+
+    B0, R0, NFP, MINOR = 5.0, 10.0, 5, 1.5  # [T], [m], dimensionless, [m]
+    # interpolation cells per dimension: the perturbation's sin(nfp phi) needs
+    # 16 for the table to resolve it to ~1e-5; the 1/r field of the traces 8
+    CELLS_PERTURBED, CELLS_TOROIDAL = 16, 8
+
+    def setUp(self):
+        self.velocity = float(np.sqrt(2 * ENERGY / MASS))
+        self.rng = np.random.default_rng(4)
+        self.classifier = TorusClassifier(self.R0, self.MINOR)
+
+    def field(self, eps, cells):
+        """The analytic field and its single precision table."""
+        field = AnalyticCylindricalField(
+            self.B0, self.R0, eps, self.NFP, (8.0, 12.0), (0.0, 3.0), cells
+        )
+        return field, CatapultCartesianField(field, self.classifier, precision="single")
+
+    def points(self, n, half_width_r, half_height):
+        """(n, 3) (r, phi, z) around the torus axis, all toroidal angles."""
+        return np.column_stack(
+            (
+                self.R0 + self.rng.uniform(-half_width_r, half_width_r, n),
+                self.rng.uniform(0.0, 2 * np.pi, n),
+                self.rng.uniform(-half_height, half_height, n),
+            )
+        )
+
+    def test_interpolant(self):
+        field, cfield = self.field(0.05, self.CELLS_PERTURBED)
+        rphiz = self.points(2000, 1.5, 2.5)  # both signs of z, every phi period
+        out = firm3dpp.test_gpu_interpolation(
+            cfield.quad_info,
+            cfield.rrange,
+            cfield.phirange,
+            cfield.zrange,
+            np.array(rphiz, dtype=np.float32),
+            "cartesian_vacuum",
+            len(rphiz),
+        ).reshape(len(rphiz), 7)
+        field.set_points_cyl(rphiz)
+        exact = np.hstack(
+            (
+                field.B_cyl(),
+                field.GradAbsB_cyl(),
+                self.classifier.evaluate_rphiz(rphiz),
+            )
+        )
+        scale = np.max(np.abs(exact), axis=0) + 1e-16
+        self.assertLess(np.max(np.abs(exact - out) / scale), 1e-4)
+
+    def test_derivatives(self):
+        field, cfield = self.field(0.05, self.CELLS_PERTURBED)
+        rphiz = self.points(500, 1.5, 2.5)
+        vpar = self.rng.uniform(-self.velocity, self.velocity, len(rphiz))
+        out = firm3dpp.test_derivatives_cartesian(
+            cfield.quad_info,
+            cfield.rrange,
+            cfield.phirange,
+            cfield.zrange,
+            np.array(rphiz, dtype=np.float32),
+            vpar.astype(np.float32),
+            self.velocity,
+            MASS,
+            CHARGE,
+            len(rphiz),
+        ).reshape(len(rphiz), 4)
+        exact = np.array(
+            [
+                cartesian_rhs(rphiz[i], vpar[i], field, MASS, CHARGE, self.velocity)
+                for i in range(len(rphiz))
+            ]
+        )
+        scale = np.max(np.abs(exact), axis=0) + 1e-16
+        self.assertLess(np.max(np.abs(exact - out) / scale), 1e-3)
+
+    def trace(self, cfield, rphiz, vpar, tmax):
+        """(n, 5) final rows (t, x, y, z, vpar) of a single precision trace."""
+        xyz = np.column_stack(
+            (
+                rphiz[:, 0] * np.cos(rphiz[:, 1]),
+                rphiz[:, 0] * np.sin(rphiz[:, 1]),
+                rphiz[:, 2],
+            )
+        )
+        res_tys, _ = trace_particles_cartesian_gpu(
+            cfield,
+            xyz,
+            vpar,
+            tmax=tmax,
+            mass=MASS,
+            charge=CHARGE,
+            Ekin=ENERGY,
+            tol=1e-8,
+            forget_exact_path=True,
+        )
+        return final_states(res_tys, boozer=False)
+
+    def drift_speed(self, vpar):
+        """Vertical drift speed [m/s] in the purely toroidal field."""
+        v_perp2 = self.velocity**2 - vpar**2
+        return MASS * (vpar**2 + 0.5 * v_perp2) / (CHARGE * self.B0 * self.R0)
+
+    def test_orbit_matches_analytic_drift(self):
+        _, cfield = self.field(0.0, self.CELLS_TOROIDAL)
+        rphiz = self.points(64, 0.5, 0.5)  # z < 0 too: z must not be wrapped
+        vpar = self.rng.uniform(-0.9, 0.9, len(rphiz)) * self.velocity
+        tmax = 1e-6  # [s]: ~1 rad of toroidal turn, ~7 cm of drift
+        out = self.trace(cfield, rphiz, vpar, tmax)
+        t = out[:, 0]
+        self.assertTrue(np.all(t >= tmax), "a particle stopped early")
+        r = np.hypot(out[:, 1], out[:, 2])
+        turn = np.angle(np.exp(1j * (np.arctan2(out[:, 2], out[:, 1]) - rphiz[:, 1])))
+        expected_turn = np.angle(np.exp(1j * vpar * t / rphiz[:, 0]))
+        np.testing.assert_allclose(r, rphiz[:, 0], atol=1e-3)
+        np.testing.assert_allclose(turn, expected_turn, atol=1e-4)
+        np.testing.assert_allclose(
+            out[:, 3], rphiz[:, 2] + self.drift_speed(vpar) * t, atol=1e-3
+        )
+        np.testing.assert_allclose(out[:, 4], vpar, rtol=1e-4)
+
+    def test_loss_time_matches_analytic(self):
+        _, cfield = self.field(0.0, self.CELLS_TOROIDAL)
+        rphiz = self.points(64, 0.5, 0.5)
+        vpar = self.rng.uniform(-0.9, 0.9, len(rphiz)) * self.velocity
+        tmax = 1e-4  # [s]: every particle drifts out through the top
+        out = self.trace(cfield, rphiz, vpar, tmax)
+        # lost on the first step that ends outside, at most one step late
+        z_exit = np.sqrt(self.MINOR**2 - (rphiz[:, 0] - self.R0) ** 2)
+        t_loss = (z_exit - rphiz[:, 2]) / self.drift_speed(vpar)
+        dt_max = rphiz[:, 0] * 0.5 * np.pi / self.velocity  # the kernel's step cap
+        self.assertTrue(np.all(out[:, 0] < tmax), "a particle was not lost")
+        self.assertTrue(np.all(out[:, 0] >= t_loss * (1 - 1e-4)))
+        self.assertTrue(np.all(out[:, 0] <= t_loss + dt_max))
 
 
 # Setup for the scripts that trace in a fresh interpreter: the wrapper reads
