@@ -35,13 +35,19 @@ from firm3d.util.constants import (
 from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY as ENERGY,
 )
+from tests.field import test_gpu
 from tests.field.test_gpu import (
+    HAS_SIMSOPT,
     CATAPULTField,
     cartesian_rhs,
     final_states,
     get_field,
     sample_test_points,
 )
+
+if HAS_SIMSOPT:
+    from simsopt.field import trace_particles as simsopt_trace_particles
+    from simsopt.field.tracing import LevelsetStoppingCriterion
 
 HAS_METAL = getattr(firm3dpp, "gpu_backend", None) == "metal"
 n_test_pts = 2000
@@ -637,6 +643,116 @@ class TestMetalTracingCartesianVacuum(unittest.TestCase):
         self.assertTrue(np.all(out[:, 0] < tmax), "a particle was not lost")
         self.assertTrue(np.all(out[:, 0] >= t_loss * (1 - 1e-4)))
         self.assertTrue(np.all(out[:, 0] <= t_loss + dt_max))
+
+
+@unittest.skipUnless(
+    HAS_METAL and HAS_SIMSOPT, "Metal backend or simsopt not available"
+)
+class TestMetalTracingCartesianCoils(unittest.TestCase):
+    """
+    The Cartesian kernels in a real coil field against simsopt: the field of
+    upstream's CUDA Cartesian tests (40 coils around Wistell-A, interpolated
+    in cylindrical coordinates) and its plasma boundary, checked in single
+    precision against simsopt's interpolant, its guiding-centre RHS, and its
+    CPU tracer.
+    """
+
+    def setUp(self):
+        np.random.seed(5)  # upstream's set-up samples with the global generator
+        # upstream's coil-field set-up (stz as (r, phi, z), bsh, sc_particle,
+        # field), called through its module: imported by name, its CUDA-only
+        # test class would be collected as part of this file
+        test_gpu.TestGPUTracingCartesian.setUp(self)
+        self.velocity = float(np.sqrt(2 * ENERGY / MASS))
+        self.vpar = np.random.default_rng(6).uniform(
+            -self.velocity, self.velocity, len(self.stz)
+        )
+
+    def test_interpolant(self):
+        f32 = self.field.compute_gpu_interpolant(self.stz, dtype=np.float32)
+        self.assertEqual(f32.dtype, np.float32)
+        cpu = self.field.compute_cpu_interpolant(self.stz)
+        scale = np.max(np.abs(cpu), axis=0) + 1e-16
+        self.assertLess(np.max(np.abs(cpu - f32.astype(np.float64)) / scale), 1e-4)
+
+    def test_derivatives(self):
+        f32 = self.field.compute_gpu_derivatives(
+            self.stz, self.vpar, self.velocity, dtype=np.float32
+        )
+        self.assertEqual(f32.dtype, np.float32)
+        cpu = self.field.compute_cpu_derivatives(self.stz, self.vpar, self.velocity)
+        scale = np.max(np.abs(cpu), axis=0) + 1e-16
+        self.assertLess(np.max(np.abs(cpu - f32.astype(np.float64)) / scale), 1e-3)
+
+    def test_tracing_against_cpu(self):
+        """
+        As assert_tracing_matches_cpu for Boozer fields: Metal single
+        precision against simsopt's double precision tracer at the times the
+        kernel reached, within a factor of the CPU's own spread between
+        tolerances 1e-8 and 1e-9.
+        """
+        tmax = 1e-6  # [s]
+        rphiz = self.stz[:200]
+        xyz = np.column_stack(
+            (
+                rphiz[:, 0] * np.cos(rphiz[:, 1]),
+                rphiz[:, 0] * np.sin(rphiz[:, 1]),
+                rphiz[:, 2],
+            )
+        )
+        vpar = self.vpar[:200]
+        cfield = CatapultCartesianField(self.bsh, self.sc_particle, precision="single")
+        res_tys, _ = trace_particles_cartesian_gpu(
+            cfield,
+            xyz,
+            vpar,
+            tmax=tmax,
+            mass=MASS,
+            charge=CHARGE,
+            Ekin=ENERGY,
+            tol=1e-8,
+            forget_exact_path=True,
+        )
+        out_gpu = final_states(res_tys, boozer=False)
+        survived = out_gpu[:, 0] >= 0.999 * tmax
+        self.assertTrue(survived.any())
+
+        def run_cpu(i, tol):
+            # simsopt's own default mass is the old 2 m_p + 2 m_n: pass it
+            res_tys, _ = simsopt_trace_particles(
+                self.bsh,
+                xyz[i : i + 1],
+                vpar[i : i + 1],
+                tmax=float(out_gpu[i, 0]),
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                stopping_criteria=[LevelsetStoppingCriterion(self.sc_particle.dist)],
+                mode="gc_vac",
+                forget_exact_path=True,
+            )
+            return final_states(res_tys, boozer=False)[0]
+
+        idx = np.where(survived)[0]
+        out_cpu = np.array([run_cpu(i, 1e-8) for i in idx])
+        reference = np.array([run_cpu(i, 1e-9) for i in idx])
+
+        columns = [1, 2, 3, 4]  # x, y, z, vpar
+        diff = out_gpu[idx][:, columns] - out_cpu[:, columns]
+        ref = reference[:, columns] - out_cpu[:, columns]
+        self.assertTrue(np.any(diff != 0), "Metal single matched CPU double exactly")
+        factor = 10.0
+        for c in range(diff.shape[1]):
+            for q in (50, 90):
+                got = np.percentile(np.abs(diff[:, c]), q)
+                expected = np.percentile(np.abs(ref[:, c]), q)
+                self.assertLessEqual(
+                    got,
+                    factor * expected + 1e-12,
+                    f"column {columns[c]}, p{q}: {got:.3e} exceeds "
+                    f"{factor} x {expected:.3e}",
+                )
 
 
 # Setup for the scripts that trace in a fresh interpreter: the wrapper reads
