@@ -1,0 +1,161 @@
+{
+  "benchmark": "conservation-qh-v2",
+  "kind": "conservation",
+  "run_id": "2026-11-17-1946_Mac16-1_M4-10gpu_neildhir",
+  "created": "2026-11-17T19:46:39-08:00",
+  "tag": "neildhir",
+  "machine": {
+    "model_name": "MacBook Pro",
+    "model_identifier": "Mac16,1",
+    "chip": "Apple M4",
+    "cpu_cores": 10,
+    "cpu_performance_cores": 4,
+    "cpu_efficiency_cores": 6,
+    "gpu_cores": 10,
+    "memory_gb": 16,
+    "macos": "27.2.1",
+    "macos_build": "26B131"
+  },
+  "mpi_ranks": 10,
+  "conditions_at_launch": {
+    "power_source": "AC Power",
+    "low_power_mode": false,
+    "thermal_state": "nominal",
+    "load_average": 9.720703125
+  },
+  "legs": {
+    "cpu": {
+      "conditions_before": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 7.8505859375
+      },
+      "conditions_after": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 18.81298828125
+      },
+      "duration_s": 136.09312510490417
+    },
+    "metal": {
+      "conditions_before": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 8.48974609375
+      },
+      "conditions_after": {
+        "power_source": "AC Power",
+        "low_power_mode": false,
+        "thermal_state": "nominal",
+        "load_average": 3.2509765625
+      },
+      "duration_s": 113.87985301017761
+    }
+  },
+  "fingerprints": {
+    "config": "aa387bc345976d921e2d313575091b0919814a205c229b54647051f1d9bbf174",
+    "equilibrium": "e977b1d3c949ed4b2957a7c4b16f3b8f0da2c631452d98e5e77ec4bfe5ac7310",
+    "metal_sources": "3b92ad1c9c3b6ef969db3cc05f9f0f3c0148138827dd00e80237197d4bd45ac3"
+  },
+  "software": {
+    "commit": "25f339a036bb6267d8325625105cbf655ed3c81e",
+    "dirty": false,
+    "python": "3.12.14",
+    "mpi": "mpiexec (Open MPI) 5.0.11"
+  },
+  "config": {
+    "kind": "conservation",
+    "supersedes": "conservation-qh",
+    "description": "alphas uniform in volume, 2.5%-beta QH field (Landreman & Buller), QS enforced",
+    "boozmn_file": "../examples/inputs/boozmn_beta2.5_QH.nc",
+    "particle": {
+      "mass_kg": 6.644657345e-27,
+      "charge_C": 3.204353268e-19,
+      "energy_J": 5.639661751679999e-13
+    },
+    "helicity": {
+      "m": 1,
+      "n": -4
+    },
+    "interpolation": {
+      "degree": 3
+    },
+    "resolutions": [
+      16,
+      32,
+      48,
+      64
+    ],
+    "tolerances": [
+      0.0001,
+      1e-06,
+      1e-08,
+      1e-10
+    ],
+    "tracing": {
+      "tmax_s": 0.0001,
+      "dt_save_s": 1e-05
+    },
+    "nparticles": 5000,
+    "seed": 42,
+    "execution": {
+      "cpu_rank_memory_gb": 0.75
+    }
+  },
+  "sanity": {
+    "passed": true,
+    "checks": [
+      {
+        "workload": "resolution 16, tol 0.0001",
+        "median_drift_cpu": 0.00310361993089387,
+        "median_drift_metal": 0.0029804059838517347,
+        "passed": true
+      },
+      {
+        "workload": "resolution 16, tol 1e-06",
+        "median_drift_cpu": 1.5691239788735034e-05,
+        "median_drift_metal": 1.5254333029191562e-05,
+        "passed": true
+      },
+      {
+        "workload": "resolution 32, tol 0.0001",
+        "median_drift_cpu": 0.0031180460209782627,
+        "median_drift_metal": 0.002999549693699541,
+        "passed": true
+      },
+      {
+        "workload": "resolution 32, tol 1e-06",
+        "median_drift_cpu": 1.4504530940551309e-05,
+        "median_drift_metal": 1.3978363793986293e-05,
+        "passed": true
+      },
+      {
+        "workload": "resolution 48, tol 0.0001",
+        "median_drift_cpu": 0.003122244494612271,
+        "median_drift_metal": 0.0030529711541306204,
+        "passed": true
+      },
+      {
+        "workload": "resolution 48, tol 1e-06",
+        "median_drift_cpu": 1.588279343217789e-05,
+        "median_drift_metal": 1.5449793833008917e-05,
+        "passed": true
+      },
+      {
+        "workload": "resolution 64, tol 0.0001",
+        "median_drift_cpu": 0.003100775439679224,
+        "median_drift_metal": 0.0030127533159740585,
+        "passed": true
+      },
+      {
+        "workload": "resolution 64, tol 1e-06",
+        "median_drift_cpu": 1.5462643176772023e-05,
+        "median_drift_metal": 1.525032151800168e-05,
+        "passed": true
+      }
+    ]
+  }
+}
