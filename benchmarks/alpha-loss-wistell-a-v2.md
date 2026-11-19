@@ -17,6 +17,7 @@ first benchmark's page.
 | Machine | CPU ranks | 10,000 × 1 ms: CPU / GPU | Speedup | 5,000 × 10 ms: CPU / GPU | Speedup | Lost, CPU / GPU |
 | --- | --- | --- | --- | --- | --- | --- |
 | MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | 10 | 31.5 s / 3.6 s | 8.7× | 159.6 s / 19.4 s | 8.2× | 43 / 42 |
+| MacBook Pro (MacBookPro18,3) · Apple M1 Pro · CPU 10 (8P+2E) · GPU 14-core · 32 GB · macOS 26.6.2 | 10 | 36.1 s / 4.0 s | 9.1× | 181.4 s / 21.7 s | 8.4× | 43 / 47 |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:summary -->
 
@@ -39,6 +40,7 @@ first benchmark's page.
 | Machine | CPU vs GPU | Reference GPU vs GPU | Reference CPU vs CPU | Check |
 | --- | --- | --- | --- | --- |
 | MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | 7 fates differ (4 / 3), p 1; losses -2% (95% CI -13% to +10%); loss time ×1.002, p 0.027 | reference | reference | pass |
+| MacBook Pro (MacBookPro18,3) · Apple M1 Pro · CPU 10 (8P+2E) · GPU 14-core · 32 GB · macOS 26.6.2 | 10 fates differ (3 / 7), p 0.34; losses +9% (95% CI -7% to +20%); loss time ×1.002, p 0.0026 | 13 fates differ (4 / 9), p 0.27; losses +12% (95% CI -7% to +25%); loss time ×1.000, p 0.55 | identical | pass |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:physics -->
 

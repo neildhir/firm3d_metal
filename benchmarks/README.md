@@ -13,6 +13,7 @@ from every contributor's Mac are filed here and plotted together.
 | Machine | Alpha losses: speedup, 5,000 × 10 ms | Alpha losses: GPU vs CPU markers lost (95% CI) | Conservation: best median drift, CPU / GPU | Conservation: speedup at the GPU's best (with builds) |
 | --- | --- | --- | --- | --- |
 | MacBook Pro (Mac16,1) · Apple M4 · CPU 10 (4P+6E) · GPU 10-core · 16 GB · macOS 27.2.1 | 8.2× | -2% (-13% to +10%) | 1.7e-07 / 1.9e-06 | 6.3× (1.0×) |
+| MacBook Pro (MacBookPro18,3) · Apple M1 Pro · CPU 10 (8P+2E) · GPU 14-core · 32 GB · macOS 26.6.2 | 8.4× | +9% (-7% to +20%) | 1.7e-07 / 1.9e-06 | 6.2× (0.8×) |
 <!-- markdownlint-enable MD013 -->
 <!-- /make_plots:at-a-glance -->
 
